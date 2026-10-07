@@ -309,7 +309,7 @@ Deno.test("failed main probes while on backup fail open instead of freezing", as
   assert(reloads.length >= 1, "fail open reloads so the player is not stuck on a dead backup");
 });
 
-Deno.test("exhausted dirty backups fail open: pass ads through and reload", async () => {
+Deno.test("exhausted dirty backups fail open: pass ads through without reload", async () => {
   const reloads = [];
   const statuses = [];
   const guard = createPlaylistGuard({
@@ -343,7 +343,7 @@ Deno.test("exhausted dirty backups fail open: pass ads through and reload", asyn
   assert(masterText.includes("live-variant.m3u8"), "fail-open keeps the real live ladder");
   assert(!masterText.includes("backup-variant"), "no dirty backup is latched as the stream");
   await flushReload();
-  assert(reloads.length >= 1, "fail-open forces a player reload so midroll can play");
+  assertEquals(reloads.length, 0, "fail-open must not force setSrc (ad-heavy spinner regression)");
 
   const media = await guard("https://video.example/live-variant.m3u8");
   const mediaText = await media.text();
@@ -352,7 +352,7 @@ Deno.test("exhausted dirty backups fail open: pass ads through and reload", asyn
   assertEquals(statuses.at(-1), false, "Blocking ads stays off during fail-open");
 });
 
-Deno.test("fail-open clears and reloads when the midroll playlist goes clean", async () => {
+Deno.test("fail-open clears without reload when the midroll playlist goes clean", async () => {
   const reloads = [];
   let dirty = true;
   const guard = createPlaylistGuard({
@@ -380,14 +380,13 @@ Deno.test("fail-open clears and reloads when the midroll playlist goes clean", a
   await guard(masterUrl);
   await guard("https://video.example/live-variant.m3u8");
   await flushReload();
-  const afterFailOpen = reloads.length;
-  assert(afterFailOpen >= 1, "initial fail-open reloaded");
+  assertEquals(reloads.length, 0, "fail-open enter does not reload");
 
   dirty = false;
   const clean = await guard("https://video.example/live-variant.m3u8");
   assert((await clean.text()).includes("video.example/live.ts"), "clean live segments return");
   await flushReload();
-  assert(reloads.length > afterFailOpen, "leaving fail-open reloads so the spinner clears");
+  assertEquals(reloads.length, 0, "leaving fail-open does not reload (no flicker thrash)");
 });
 
 Deno.test("scheduleReload fires after the clean playlist Response is returned", async () => {

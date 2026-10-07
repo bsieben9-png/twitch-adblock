@@ -265,18 +265,24 @@ function installTwitchAdblockPlaylist(target) {
       return lines[index + 1].trim();
     }
 
-    const followingClean = new Array(lines.length).fill("");
-    let upcoming = "";
-    for (let i = lines.length - 1; i >= 0; i--) {
-      followingClean[i] = upcoming;
-      const clean = cleanLiveUrl(i);
-      if (clean) upcoming = clean;
+    function hasMediaSegment(bodyLines) {
+      for (let i = 0; i < bodyLines.length - 1; i++) {
+        if (!bodyLines[i].startsWith("#EXTINF")) continue;
+        const next = (bodyLines[i + 1] || "").trim();
+        if (next && !next.startsWith("#")) return true;
+      }
+      return false;
     }
 
+    // Drop ad slots instead of re-listing the previous/next live URL for every
+    // ad EXTINF. Repeating one live.ts N times makes HLS replay the same A/V
+    // segment (Bran: tyler1 loop). Blank unique ad URLs only when the strip
+    // would otherwise leave the media playlist empty.
     const adUrls = [];
     const kept = [];
     let replaced = false;
-    let previousClean = "";
+    let firstClean = "";
+    let firstAdHold = null;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]
         .replaceAll(/(X-TV-TWITCH-AD-URL=")[^"]*(")/g, "$1https://twitch.tv$2")
@@ -284,26 +290,33 @@ function installTwitchAdblockPlaylist(target) {
       if (line.startsWith("#EXT-X-TWITCH-PREFETCH:")) continue;
       if (line.startsWith("#") && hasStitchedAd(line)) continue;
       const clean = cleanLiveUrl(i);
-      if (clean) previousClean = clean;
+      if (clean && !firstClean) firstClean = clean;
       const nextUrl = lines[i + 1] && !lines[i + 1].startsWith("#") ? lines[i + 1].trim() : "";
       const adSegment = isAdSegmentLine(lines, i, windows, times);
       if (adSegment) {
         replaced = true;
-        const duration = line.slice("#EXTINF:".length).split(",")[0];
-        const adUrl = nextUrl;
-        const anchor = previousClean || followingClean[i];
-        kept.push(`#EXTINF:${duration},live`);
-        if (anchor) {
-          kept.push(anchor);
-        } else {
-          kept.push(adUrl);
-          adUrls.push(adUrl);
+        if (nextUrl) adUrls.push(nextUrl);
+        if (!firstAdHold && nextUrl) {
+          const duration = line.slice("#EXTINF:".length).split(",")[0];
+          firstAdHold = { duration, url: nextUrl };
         }
         i += 1;
         continue;
       }
       kept.push(line);
     }
+
+    if (replaced && !hasMediaSegment(kept)) {
+      if (firstClean) {
+        kept.push("#EXTINF:2.0,live");
+        kept.push(firstClean);
+      } else if (firstAdHold) {
+        // All-ad window: keep one blankable hold (unique ad URL), not N repeats.
+        kept.push(`#EXTINF:${firstAdHold.duration},live`);
+        kept.push(firstAdHold.url);
+      }
+    }
+
     return { text: kept.join("\n"), adUrls, stripped: replaced };
   }
 
