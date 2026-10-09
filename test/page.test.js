@@ -142,15 +142,19 @@ Deno.test("visibilitychange does not block Twitch chat reconnect listeners", () 
   assert(!source.slice(source.indexOf("function quietCoveredMedia"), source.indexOf("function skipLiveClientAd")).includes("setSrc"), "quieting a commercial does not reload the player");
 });
 
-Deno.test("applyCover traces cover wait and mutes only-video audio without pause", () => {
+Deno.test("applyCover blanks only-video commercials without pause or setSrc", () => {
   const start = source.indexOf("function applyCover");
   const end = source.indexOf("// Stream display ads cover or squeeze", start);
   const block = source.slice(start, end);
-  assert(block.includes('trace("cover", reason)'), "a non-covered plan is traced, including wait");
   assert(block.includes('plan.action === "wait"'), "wait is the only-video commercial path");
   assert(block.includes("holdQuiet(video, { pause: false })"), "the only video is muted without pause");
   assert(block.includes("plan.mute"), "wait plans list videos to mute");
-  assert(!/\bsetSrc\b/.test(block), "only-video mute does not reload the player");
+  assert(block.includes("placeBlankSheet"), "only-video cover places a blank sheet over the ad");
+  assert(block.includes('visibility:hidden'), "the commercial video is hidden under the blank");
+  assert(block.includes('trace("cover", "blank")'), "only-video blank is traced once");
+  assert(block.includes("coverApplying"), "blank sheet mutations do not re-enter applyCover");
+  assert(!/\bsetSrc\b/.test(block), "only-video blank does not reload the player");
+  assert(source.includes("AbortError"), "aborted fetches are not traced as fail-open ladder failures");
 });
 
 Deno.test("only player-looking workers get the playlist prelude", () => {
@@ -373,7 +377,8 @@ Deno.test("a corner live video covers the commercial and the only video is muted
 
   const only = node("video", { width: 800, height: 450, videoWidth: 1920, readyState: 4 });
   const onlyAdAudio = node("audio", { className: "commercial-audio" });
-  const alone = node("div", { className: "video-player", children: [only, onlyAdAudio] });
+  const onlyBanner = node("div", { target: "video-ad-countdown" });
+  const alone = node("div", { className: "video-player", children: [only, onlyAdAudio, onlyBanner] });
   const waiting = api.coverLiveOverAd({
     querySelector() {
       return alone;
@@ -388,6 +393,7 @@ Deno.test("a corner live video covers the commercial and the only video is muted
   assertEquals(waiting.mute.length, 1);
   if (waiting.mute[0] !== only) throw new Error("the only commercial video is listed for mute");
   if (!waiting.audios.includes(onlyAdAudio)) throw new Error("a separate ad audio element is muted on wait");
+  if (waiting.banners.length !== 1 || waiting.banners[0] !== onlyBanner) throw new Error("only-video wait still hides Twitch ad chrome");
 
   const solo = { muted: false, paused: false, volume: 0.9, pause() { this.paused = true; } };
   const mutePrior = api.quietCoveredMedia(solo, { pause: false });

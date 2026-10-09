@@ -54,8 +54,12 @@
       const request = await rewritePlaybackRequest(input, init);
       return await guard(request.input, request.init);
     } catch (error) {
-      console.log("twitch-adblock failed open", error);
-      trace("fail-open", "page-fetch");
+      // Twitch aborts many playlist polls; that is not a broken ladder.
+      const aborted = error && (error.name === "AbortError" || error.code === 20);
+      if (!aborted) {
+        console.log("twitch-adblock failed open", error);
+        trace("fail-open", "page-fetch");
+      }
       return nativeFetch(replay, init);
     }
   };
@@ -564,7 +568,10 @@
   }
 
   const coveredNodes = [];
+  const blankSheets = [];
   let coverWanted = false;
+  let coverApplying = false;
+  let coverBlanked = false;
   let coverObserver = null;
   const heldQuiet = new Map();
   function releaseCover() {
@@ -576,10 +583,44 @@
       }
     }
     coveredNodes.length = 0;
+    for (const sheet of blankSheets) {
+      try {
+        if (sheet && sheet.parentNode) sheet.parentNode.removeChild(sheet);
+      } catch {
+        // The sheet is already gone.
+      }
+    }
+    blankSheets.length = 0;
+    coverBlanked = false;
   }
   function rememberStyle(el, cssText) {
-    coveredNodes.push({ el, css: el.style ? el.style.cssText || "" : "" });
+    if (!coveredNodes.some((item) => item.el === el)) {
+      coveredNodes.push({ el, css: el.style ? el.style.cssText || "" : "" });
+    }
     el.style.cssText = cssText;
+  }
+  function placeBlankSheet(player) {
+    if (!player || typeof player.appendChild !== "function") return;
+    if (blankSheets.some((sheet) => sheet && sheet.parentNode === player)) return;
+    if (player.querySelector) {
+      const found = player.querySelector("[data-twitch-adblock-blank='1']");
+      if (found) {
+        blankSheets.push(found);
+        return;
+      }
+    }
+    if (player.style && (!player.style.position || player.style.position === "static")) {
+      rememberStyle(player, (player.style.cssText || "") + ";position:relative;");
+    }
+    const sheet = document.createElement("div");
+    sheet.setAttribute("data-twitch-adblock-blank", "1");
+    sheet.style.cssText = "position:absolute;inset:0;z-index:7;background:#0e0e10;pointer-events:none;";
+    try {
+      player.appendChild(sheet);
+      blankSheets.push(sheet);
+    } catch {
+      // The player node is gone; leave the commercial muted only.
+    }
   }
   function holdQuiet(el, opts) {
     if (!el) return;
@@ -650,47 +691,65 @@
     }
   }
   function applyCover() {
-    if (!coverWanted) return;
-    let plan;
+    if (!coverWanted || coverApplying) return;
+    coverApplying = true;
     try {
-      plan = coverLiveOverAd(document);
-    } catch {
-      trace("cover", "fail-open");
-      return;
-    }
-    if (!plan || plan.action !== "covered") {
-      const reason = plan && plan.action ? plan.action : "none";
-      trace("cover", reason);
-      // Only-video commercial: no corner to promote. Mute ad audio without
-      // pausing or hiding the only picture (that would blank the player).
-      if (plan && plan.action === "wait") {
-        for (const video of plan.mute || []) holdQuiet(video, { pause: false });
-        for (const audio of plan.audios || []) holdQuiet(audio);
+      let plan;
+      try {
+        plan = coverLiveOverAd(document);
+      } catch {
+        trace("cover", "fail-open");
+        return;
       }
-      return;
+      if (!plan || plan.action !== "covered") {
+        const reason = plan && plan.action ? plan.action : "none";
+        // Only-video commercial: no corner to promote. Mute + blank the picture and
+        // hide Twitch ad chrome so the commercial is not visible. Do not pause or
+        // reload the player — when the break ends, styles restore and live continues.
+        if (plan && plan.action === "wait" && (plan.mute || []).length) {
+          for (const video of plan.mute || []) {
+            holdQuiet(video, { pause: false });
+            rememberStyle(video, (video.style.cssText || "") + ";visibility:hidden !important;");
+          }
+          for (const audio of plan.audios || []) holdQuiet(audio);
+          for (const banner of plan.banners || []) {
+            rememberStyle(banner, (banner.style.cssText || "") + ";display:none !important;");
+          }
+          placeBlankSheet(plan.player);
+          if (!coverBlanked) {
+            coverBlanked = true;
+            trace("cover", "blank");
+          }
+          return;
+        }
+        trace("cover", reason);
+        return;
+      }
+      releaseCover();
+      const player = plan.player;
+      if (player && player.style && (!player.style.position || player.style.position === "static")) {
+        rememberStyle(player, (player.style.cssText || "") + ";position:relative;");
+      }
+      for (const video of plan.hidden) {
+        holdQuiet(video);
+        rememberStyle(video, (video.style.cssText || "") + ";visibility:hidden !important;");
+      }
+      for (const audio of plan.audios || []) holdQuiet(audio);
+      let node = plan.live;
+      const top = player || null;
+      let depth = 0;
+      while (node && node !== top && depth < 5) {
+        rememberStyle(node, (node.style.cssText || "") + ";position:absolute !important;inset:0 !important;width:100% !important;height:100% !important;z-index:6 !important;object-fit:contain !important;");
+        node = node.parentElement;
+        depth += 1;
+      }
+      for (const banner of plan.banners) {
+        rememberStyle(banner, (banner.style.cssText || "") + ";display:none !important;");
+      }
+      trace("cover", "live");
+    } finally {
+      coverApplying = false;
     }
-    releaseCover();
-    const player = plan.player;
-    if (player && player.style && (!player.style.position || player.style.position === "static")) {
-      rememberStyle(player, (player.style.cssText || "") + ";position:relative;");
-    }
-    for (const video of plan.hidden) {
-      holdQuiet(video);
-      rememberStyle(video, (video.style.cssText || "") + ";visibility:hidden !important;");
-    }
-    for (const audio of plan.audios || []) holdQuiet(audio);
-    let node = plan.live;
-    const top = player || null;
-    let depth = 0;
-    while (node && node !== top && depth < 5) {
-      rememberStyle(node, (node.style.cssText || "") + ";position:absolute !important;inset:0 !important;width:100% !important;height:100% !important;z-index:6 !important;object-fit:contain !important;");
-      node = node.parentElement;
-      depth += 1;
-    }
-    for (const banner of plan.banners) {
-      rememberStyle(banner, (banner.style.cssText || "") + ";display:none !important;");
-    }
-    trace("cover", "live");
   }
 
   // Stream display ads cover or squeeze the live picture. Hide only their wrappers,
@@ -774,8 +833,8 @@ function isVodOrClipLocation(loc) {
 // page is left alone. If the only picture sits inside the ad player, do nothing.
 // The commercial stays in the main video element so that element is not reloaded.
 // When Twitch also has the live picture in a corner video, that corner fills the
-// player and the commercial video is hidden. One video cannot be hidden or paused:
-// that would blank the only picture. Mute its audio instead while cover waits.
+// player and the commercial video is hidden. One video cannot be paused or reloaded:
+// blank + mute it and hide Twitch ad chrome until the break ends.
 function coverLiveOverAd(doc) {
   const player = doc.querySelector(".video-player") || doc.querySelector("[data-a-target='video-player']");
   if (!player) return { action: "none", player: null, hidden: [], live: null, banners: [], audios: [], mute: [] };
@@ -816,6 +875,26 @@ function coverLiveOverAd(doc) {
     }
     return audios;
   }
+  function collectAdBanners(live) {
+    const banners = [];
+    if (!player.querySelectorAll) return banners;
+    const selectors = [
+      "[data-a-target='video-ad-countdown']",
+      "[data-a-target='video-ad-label']",
+      "[data-a-target='video-ad-badge']",
+      "[data-test-selector='ad-banner']",
+      "[class*='commercial-break']",
+      "[class*='video-ads']",
+      "[aria-label='Ad']",
+    ].join(", ");
+    for (const el of player.querySelectorAll(selectors)) {
+      if (live && el.contains && el.contains(live)) continue;
+      if (el.getAttribute && el.getAttribute("data-twitch-adblock-blank") === "1") continue;
+      if (el.id === "twitch-adblock-notice") continue;
+      banners.push(el);
+    }
+    return banners;
+  }
   const corner = videos.find((video) => inCorner(video) && hasPicture(video)) || null;
   let live = corner;
   if (!live && videos.length >= 2) {
@@ -823,21 +902,16 @@ function coverLiveOverAd(doc) {
     if (ready.length >= 2) live = ready.slice().sort((left, right) => areaOf(left) - areaOf(right))[0];
   }
   if (!live) {
-    // No second live picture to promote without a player reload. Mute commercial audio.
+    // No second live picture to promote without a player reload. Blank + mute.
     const mute = videos.filter(hasPicture);
-    return { action: "wait", player, hidden: [], live: null, banners: [], audios: collectAdAudios(null), mute };
+    return { action: "wait", player, hidden: [], live: null, banners: collectAdBanners(null), audios: collectAdAudios(null), mute };
   }
   const hidden = videos.filter((video) => video !== live);
   if (!hidden.length) {
-    // Only the live corner exists — do not mute live as if it were a commercial.
+    // Only the live corner exists — do not mute or blank live as if it were a commercial.
     return { action: "wait", player, hidden: [], live, banners: [], audios: [], mute: [] };
   }
-  const banners = [];
-  for (const el of player.querySelectorAll("[data-a-target='video-ad-countdown'], [data-a-target='video-ad-label'], [class*='commercial-break']")) {
-    if (el.contains && el.contains(live)) continue;
-    banners.push(el);
-  }
-  return { action: "covered", player, hidden, live, banners, audios: collectAdAudios(live), mute: [] };
+  return { action: "covered", player, hidden, live, banners: collectAdBanners(live), audios: collectAdAudios(live), mute: [] };
 }
 
 // Mute (and optionally pause) commercial media. The corner live video is not
@@ -951,12 +1025,15 @@ function startTwitchAdblockWorker() {
       }
       return await guard(nextInput, nextInit);
     } catch (error) {
-      console.log("twitch-adblock failed open", error);
-      try {
-        const debug = globalThis.TwitchAdblockDebug;
-        if (debug && debug.on === true) debug.trace("fail-open", "worker-fetch");
-      } catch {
-        // Fail open even when the debug log is broken.
+      const aborted = error && (error.name === "AbortError" || error.code === 20);
+      if (!aborted) {
+        console.log("twitch-adblock failed open", error);
+        try {
+          const debug = globalThis.TwitchAdblockDebug;
+          if (debug && debug.on === true) debug.trace("fail-open", "worker-fetch");
+        } catch {
+          // Fail open even when the debug log is broken.
+        }
       }
       return nativeFetch(replay, init);
     }
