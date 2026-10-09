@@ -1107,11 +1107,14 @@ function createPlaylistGuard(env) {
 
   // servingMain: this master response already hands the player the main ladder,
   // so it needs neither the moving-off guard nor another reload.
+  // enteredByReload: the player was moved with setSrc. A playlist rewrite never
+  // did that, and a leave reload would blank the live picture.
   function leaveBackup(session, servingMain, deadMain) {
     const wasUsing = session.usingBackup;
-    const handoff = wasUsing && !servingMain;
+    const enteredByReload = session.reloadedForBackup === true;
+    const handoff = wasUsing && !servingMain && enteredByReload;
     trace("playback", wasUsing ? "leave-backup" : "clear-break");
-    if (wasUsing && !deadMain && Date.now() - session.backupAt < flapMs) holdAfterFalseAlarm(session);
+    if (wasUsing && enteredByReload && !deadMain && Date.now() - session.backupAt < flapMs) holdAfterFalseAlarm(session);
     session.adRung = null;
     // video-swap-new IsMovingOffBackupEncodings: ignore ad tags until the next
     // master poll so leave+reload cannot immediately re-enter backup.
@@ -1487,6 +1490,77 @@ function createPlaylistGuard(env) {
     });
   }
 
+  function primeCleanSegments(session, channel) {
+    if (session.cleanSegmentPromise) return;
+    session.cleanSegmentPromise = loadCleanSegments(session, channel).then((urls) => {
+      session.cleanSegments = urls || [];
+      return session.cleanSegments;
+    }).catch(() => {
+      session.cleanSegments = [];
+      return [];
+    });
+  }
+
+  async function readyCleanSegments(session, channel) {
+    if (session.cleanSegments && session.cleanSegments.length) return session.cleanSegments;
+    primeCleanSegments(session, channel);
+    let timer;
+    try {
+      return await Promise.race([
+        session.cleanSegmentPromise,
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(session.cleanSegments || []), probeDeadlineMs);
+        }),
+      ]);
+    } catch {
+      return session.cleanSegments || [];
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  async function loadCleanSegments(session, channel) {
+    const masterUrl = session.masterUrl;
+    const liveText = session.liveMaster;
+    if (!masterUrl || !liveText || !channel) return [];
+    if (session.servedCleanUrl) {
+      const known = await fetchPlaylist(session.servedCleanUrl);
+      const knownUrls = known ? playlist.liveSegmentUrls(known, session.servedCleanUrl) : [];
+      if (knownUrls.length) return knownUrls;
+    }
+    const found = (await Promise.all(backupTypes.map((playerType) => probeBackupType(channel, masterUrl, liveText, playerType))))
+      .filter((item) => item && item.cleanUrl);
+    found.sort((left, right) => (right.score || 0) - (left.score || 0));
+    const urls = [];
+    const seen = new Set();
+    for (const item of found) {
+      const body = await fetchPlaylist(item.cleanUrl);
+      if (!body) continue;
+      for (const segmentUrl of playlist.liveSegmentUrls(body, item.cleanUrl)) {
+        if (seen.has(segmentUrl)) continue;
+        seen.add(segmentUrl);
+        urls.push(segmentUrl);
+      }
+      if (urls.length) break;
+    }
+    return urls;
+  }
+
+  async function blockWithoutReload(session, channel, url, text) {
+    const reason = playlist.adReason(text);
+    const rung = session.variants.get(url) || null;
+    trace("playback", "ad-seen " + reason + (rung && rung.resolution ? " " + rung.resolution : ""));
+    if (reason === "upcoming") primeCleanSegments(session, channel);
+    const urls = reason === "upcoming" ? [] : await readyCleanSegments(session, channel);
+    const spliced = playlist.replaceAdSegments(text, urls);
+    if (!spliced.ok) {
+      trace("playlist", "inf-no-reload");
+      return null;
+    }
+    if (spliced.replaced) trace("playlist", "inf-replaced " + spliced.replaced);
+    return spliced.text;
+  }
+
   async function backupMedia(url, text) {
     const channel = streamByUrl.get(url);
     if (!channel) return null;
@@ -1501,10 +1575,15 @@ function createPlaylistGuard(env) {
     }
     if (movingOff(session)) return null;
     if (!playlist.hasAdBreak(text)) return null;
+    const reason = playlist.adReason(text);
+    if (reason === "upcoming" || reason === "inf" || reason === "url" || reason === "range") {
+      // setSrc blanks the picture. Rewrite this media playlist in place.
+      return await blockWithoutReload(session, channel, url, text);
+    }
     const rung = session.variants.get(url) || null;
     if (!session.usingBackup) {
       session.adRung = rung;
-      trace("playback", "ad-seen " + playlist.adReason(text) + (rung && rung.resolution ? " " + rung.resolution : ""));
+      trace("playback", "ad-seen " + reason + (rung && rung.resolution ? " " + rung.resolution : ""));
     }
     return await backupMaster(session.masterUrl, session.liveMaster, url, text, async (current, name, mapped) => {
       if (!mapped || !current.usingBackup) return null;

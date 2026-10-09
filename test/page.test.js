@@ -203,7 +203,7 @@ Deno.test("return-to-main refreshes a rotated live ladder and fails open", () =>
 Deno.test("leaveBackup uses video-swap-new moving-off guard", () => {
   assert(source.includes("movingOffBackup"), "session tracks IsMovingOffBackupEncodings");
   assert(/if \(handoff\) \{\s*session\.movingOffBackup = true;\s*session\.movingOffAt = Date\.now\(\);/.test(source), "leave sets the guard before reload");
-  assert(source.includes("const handoff = wasUsing && !servingMain;"), "a master that already serves main needs no guard");
+  assert(source.includes("const handoff = wasUsing && !servingMain && enteredByReload;"), "setSrc only after a reload entered the backup");
   assert(source.includes("const movingOffMs = 10000"), "a guard the master never clears still expires");
   assert(source.includes("movingOffBackup = false"), "master poll clears the guard");
   assert(source.includes('const backupTypes = ["autoplay", "picture-by-picture", "embed"]'), "backup try order matches video-swap-new");
