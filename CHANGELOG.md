@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.1.22 — beta
+## 0.1.23 — beta
+
+- During a Twitch midroll the player stays on the encode it is already decoding. There is no player reload for this path.
+- When Twitch shows a second, corner live video, that corner fills the player. The commercial is hidden, muted, and paused for the whole cover. Separate ad audio in the player is muted. When the cover ends, the commercial’s previous mute and pause state is restored.
+- When Twitch never mounts a corner (only-video commercial), the commercial’s audio is muted without pausing or hiding the picture. The ad picture may still show until a corner appears.
+- The YouTube “Blocking ads” label clears about a second after the skip instead of staying up for the whole video.
+- VODs and clips are unchanged. Debug stays on by default (temporary).
+
+## 0.1.22 — stable
 
 - Live client-side ad cues (a `twitch-maf-ad` marker on a playlist whose segments stay live) now hide that ad player and resume the live video. The player is not reloaded for this, and it does not start a backup swap. If hiding the ad would take the only picture, the ad plays.
 - VODs and clips are unchanged.
