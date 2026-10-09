@@ -1,4 +1,6 @@
-// Playlist helpers for live Twitch HLS. Loaded as a classic script before page.js.
+// Playlist helpers kept for pack/fuzz and YouTube-adjacent tooling.
+// Twitch live midrolls are handled by the pinned video-swap-new bundle in page.js
+// (pixeltris TwitchAdSolutions). Do not reintroduce a parallel rewrite here.
 function installTwitchAdblockPlaylist(target) {
   function linesOf(text) {
     return String(text || "").replaceAll("\r", "").split("\n");

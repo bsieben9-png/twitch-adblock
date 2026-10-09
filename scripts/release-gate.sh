@@ -207,9 +207,23 @@ PY
 section "3. Dangerous APIs + identity / phone-home"
 SCAN_ROOT="$PKG/src"
 SCAN_PATHS=("$SCAN_ROOT")
-if rg -n --pcre2 '\beval\s*\(|\.innerHTML\s*=|document\.write\s*\(|importScripts\s*\(|chrome\.identity|browser\.identity|navigator\.sendBeacon|geolocation|webkitRTCPeerConnection|\bRTCPeerConnection\b' "${SCAN_PATHS[@]}" >/tmp/gate-danger.txt 2>/dev/null; then
-  cat /tmp/gate-danger.txt
-  fail "dangerous API hits in packaged src"
+# video-swap-new (pixeltris) needs eval(workerString) to boot the player worker
+# blob and one innerHTML write for the in-player "Blocking ads" banner. Allow only
+# those two known lines in src/page.js; everything else still fails the gate.
+DANGER_PAT='\beval\s*\(|\.innerHTML\s*=|document\.write\s*\(|importScripts\s*\(|chrome\.identity|browser\.identity|navigator\.sendBeacon|geolocation|webkitRTCPeerConnection|\bRTCPeerConnection\b'
+if rg -n --pcre2 "$DANGER_PAT" "${SCAN_PATHS[@]}" >/tmp/gate-danger-raw.txt 2>/dev/null; then
+  # Allow only the two known video-swap-new lines in page.js.
+  set +e
+  rg -v 'page\.js:[0-9]+:.*eval\(workerString\)' /tmp/gate-danger-raw.txt \
+    | rg -v 'page\.js:[0-9]+:.*adBlockDiv\.innerHTML = ' \
+    >/tmp/gate-danger.txt
+  set -e
+  if [[ -s /tmp/gate-danger.txt ]]; then
+    cat /tmp/gate-danger.txt
+    fail "dangerous API hits in packaged src"
+  else
+    pass "no unexpected eval/innerHTML/identity/beacon/RTC (video-swap-new worker eval + banner allowed)"
+  fi
 else
   pass "no eval/innerHTML/identity/beacon/RTC in packaged src"
 fi
