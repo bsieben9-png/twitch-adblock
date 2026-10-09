@@ -234,6 +234,7 @@
     }
     if (data.type === "status") setNotice(Boolean(data.blocking));
     if (data.type === "client-ad") noteClientAd(data.on === true);
+    if (data.type === "cover-ad") noteCoverAd(data.on === true);
   }
 
   async function pageGql(body) {
@@ -562,6 +563,90 @@
     setClientNotice(true);
   }
 
+  const coveredNodes = [];
+  let coverWanted = false;
+  let coverObserver = null;
+  function releaseCover() {
+    for (const item of coveredNodes) {
+      try {
+        if (item.muted != null && item.el.muted !== item.muted) item.el.muted = item.muted;
+        item.el.style.cssText = item.css;
+      } catch {
+        // The node is already gone.
+      }
+    }
+    coveredNodes.length = 0;
+  }
+  function rememberStyle(el, cssText, muted) {
+    coveredNodes.push({ el, css: el.style ? el.style.cssText || "" : "", muted: muted == null ? null : muted });
+    el.style.cssText = cssText;
+  }
+  function noteCoverAd(on) {
+    if (isVodOrClipLocation(location)) {
+      coverWanted = false;
+      releaseCover();
+      if (coverObserver) coverObserver.disconnect();
+      coverObserver = null;
+      return;
+    }
+    coverWanted = on === true;
+    if (!coverWanted) {
+      releaseCover();
+      if (coverObserver) coverObserver.disconnect();
+      coverObserver = null;
+      trace("cover", "clear");
+      return;
+    }
+    applyCover();
+    if (!coverObserver && typeof MutationObserver === "function") {
+      coverObserver = new MutationObserver(() => {
+        if (coverWanted) applyCover();
+      });
+      try {
+        coverObserver.observe(document.documentElement, { childList: true, subtree: true });
+      } catch {
+        coverObserver = null;
+      }
+    }
+  }
+  function applyCover() {
+    if (!coverWanted) return;
+    let plan;
+    try {
+      plan = coverLiveOverAd(document);
+    } catch {
+      trace("cover", "fail-open");
+      return;
+    }
+    if (!plan || plan.action !== "covered") return;
+    releaseCover();
+    const player = plan.player;
+    if (player && player.style && (!player.style.position || player.style.position === "static")) {
+      rememberStyle(player, (player.style.cssText || "") + ";position:relative;");
+    }
+    for (const video of plan.hidden) {
+      const wasMuted = video.muted === true;
+      try {
+        video.muted = true;
+      } catch {
+        // A video we cannot mute stays audible until the break ends.
+      }
+      rememberStyle(video, (video.style.cssText || "") + ";visibility:hidden !important;", wasMuted);
+    }
+    let node = plan.live;
+    const top = player || null;
+    let depth = 0;
+    while (node && node !== top && depth < 5) {
+      rememberStyle(node, (node.style.cssText || "") + ";position:absolute !important;inset:0 !important;width:100% !important;height:100% !important;z-index:6 !important;object-fit:contain !important;");
+      node = node.parentElement;
+      depth += 1;
+    }
+    for (const banner of plan.banners) {
+      rememberStyle(banner, (banner.style.cssText || "") + ";display:none !important;");
+    }
+    trace("cover", "live");
+  }
+
   // Stream display ads cover or squeeze the live picture. Hide only their wrappers,
   // and never an element that holds the video or the player box.
   const PLAYER_AD_CSS = [
@@ -642,6 +727,50 @@ function isVodOrClipLocation(loc) {
 
 // Hide a live client-side ad player that is not the live video. A VOD or clip
 // page is left alone. If the only picture sits inside the ad player, do nothing.
+// The commercial stays in the main video element so that element is not reloaded.
+// When Twitch also has the live picture in a corner video, that corner fills the
+// player and the commercial video is hidden. One video is left alone: hiding it
+// would blank the only picture.
+function coverLiveOverAd(doc) {
+  const player = doc.querySelector(".video-player") || doc.querySelector("[data-a-target='video-player']");
+  if (!player) return { action: "none", player: null, hidden: [], live: null, banners: [] };
+  const videos = [...player.querySelectorAll("video")];
+  function areaOf(video) {
+    if (!video.getBoundingClientRect) return 0;
+    const box = video.getBoundingClientRect();
+    return (box.width || 0) * (box.height || 0);
+  }
+  function inCorner(video) {
+    let node = video;
+    while (node && node !== player) {
+      const className = String(node.className || "");
+      const target = node.getAttribute ? String(node.getAttribute("data-a-target") || "") : "";
+      if (/pbyp|picture-by-picture|squeezeback/i.test(className + " " + target)) return true;
+      node = node.parentElement;
+    }
+    return false;
+  }
+  function hasPicture(video) {
+    if (typeof video.videoWidth === "number" && video.videoWidth === 0 && video.readyState === 0) return false;
+    return true;
+  }
+  const corner = videos.find((video) => inCorner(video) && hasPicture(video)) || null;
+  let live = corner;
+  if (!live && videos.length >= 2) {
+    const ready = videos.filter(hasPicture);
+    if (ready.length >= 2) live = ready.slice().sort((left, right) => areaOf(left) - areaOf(right))[0];
+  }
+  if (!live) return { action: "wait", player, hidden: [], live: null, banners: [] };
+  const hidden = videos.filter((video) => video !== live);
+  if (!hidden.length) return { action: "wait", player, hidden: [], live, banners: [] };
+  const banners = [];
+  for (const el of player.querySelectorAll("[data-a-target='video-ad-countdown'], [data-a-target='video-ad-label'], [class*='commercial-break']")) {
+    if (el.contains && el.contains(live)) continue;
+    banners.push(el);
+  }
+  return { action: "covered", player, hidden, live, banners };
+}
+
 function skipLiveClientAd(doc, loc) {
   if (isVodOrClipLocation(loc)) return { action: "vod", roots: [], live: null };
   const roots = [...doc.querySelectorAll("[class*='client-side-video-ads'], [class*='online-video-ad']")];
@@ -712,6 +841,9 @@ function startTwitchAdblockWorker() {
     },
     clientAd(on) {
       postMessage({ source: "twitch-adblock", type: "client-ad", on: on === true });
+    },
+    coverAd(on) {
+      postMessage({ source: "twitch-adblock", type: "cover-ad", on: on === true });
     },
   });
   self.fetch = async function (input, init) {
@@ -1322,10 +1454,18 @@ function createPlaylistGuard(env) {
     // on, so one rung cannot say "ad" while another says "clean" and flip the swap.
     const ads = await sampleHasAds(liveText, masterUrl, knownUrl || adRungUrl(session, liveText, masterUrl), knownBody);
     if (ads === false) {
+      signalCover(session, false);
       if (session.usingBackup || session.failOpen) trace("playback", "clean");
       // Keep the session: a midroll that starts later on these media playlists must
       // still find its master. Idle sessions age out through evictSessions.
       leaveBackup(session, !knownUrl);
+      return null;
+    }
+    if (ads === true) {
+      // Another encode, even at the same resolution, resets the decoder and
+      // stalls the picture. Keep this ladder. The page covers the commercial.
+      signalCover(session, true);
+      trace("playback", "keep-ladder");
       return null;
     }
     if (ads === null) {
@@ -1510,6 +1650,26 @@ function createPlaylistGuard(env) {
     return next;
   }
 
+  function signalCover(session, on) {
+    const next = on === true;
+    if (session.covering === next) return;
+    session.covering = next;
+    trace("playback", next ? "cover-ad" : "cover-clear");
+    if (typeof env.status === "function") {
+      try {
+        env.status(next);
+      } catch {
+        // The label is not the picture.
+      }
+    }
+    if (typeof env.coverAd !== "function") return;
+    try {
+      env.coverAd(next);
+    } catch {
+      // The picture decision does not depend on the cover signal.
+    }
+  }
+
   function segmentKey(want) {
     return want && want.resolution ? String(want.resolution) : "";
   }
@@ -1635,11 +1795,20 @@ function createPlaylistGuard(env) {
       return session.usingBackup ? text : null;
     }
     if (movingOff(session)) return null;
-    if (!playlist.hasAdBreak(text)) return null;
+    if (!playlist.hasAdBreak(text)) {
+      signalCover(session, false);
+      return null;
+    }
     const reason = playlist.adReason(text);
     if (reason === "upcoming" || reason === "inf" || reason === "url" || reason === "range") {
-      // setSrc blanks the picture. Rewrite this media playlist in place.
-      return await blockWithoutReload(session, channel, url, text);
+      // Keep this playlist's own segment URLs. Swapping in another encode stalls
+      // the picture. The page covers the commercial, including when no backup
+      // ladder has a clean segment.
+      const rung = session.variants.get(url) || null;
+      trace("playback", "ad-seen " + reason + (rung && rung.resolution ? " " + rung.resolution : ""));
+      signalCover(session, true);
+      trace("playlist", "cover-ad");
+      return null;
     }
     const rung = session.variants.get(url) || null;
     if (!session.usingBackup) {
@@ -1766,7 +1935,7 @@ function createPlaylistGuard(env) {
       // already tried every clean backup, so this is the exhausted (or unknown) case.
       // Never strip main into a live-hold under Twitch "taking an ad break" UI.
       if (!swapped && playlist.hasAdBreak(text)) {
-        env.status(false);
+        if (!session || !session.covering) env.status(false);
         trace("playlist", "pass-midroll");
         return textResponse(withoutMafAd(throughLedger(session, text)));
       }

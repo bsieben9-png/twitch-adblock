@@ -282,6 +282,75 @@ Deno.test("a live client-side ad player is hidden and a vod ad player is left al
   assertEquals(blocked.roots.length, 0);
 });
 
+Deno.test("a corner live video covers the commercial and the only video is left alone", () => {
+  const start = source.indexOf("function isVodOrClipLocation");
+  const end = source.indexOf("function startTwitchAdblockWorker", start);
+  const api = new Function(`${source.slice(start, end)}\nreturn { coverLiveOverAd };`)();
+  function node(tag, opts) {
+    const el = {
+      tag,
+      className: (opts && opts.className) || "",
+      target: (opts && opts.target) || "",
+      children: (opts && opts.children) || [],
+      parentElement: null,
+      style: { cssText: "", position: "" },
+      muted: false,
+      videoWidth: opts && opts.videoWidth,
+      readyState: opts && opts.readyState,
+      width: (opts && opts.width) || 0,
+      height: (opts && opts.height) || 0,
+      getAttribute(name) {
+        return name === "data-a-target" ? el.target : "";
+      },
+      getBoundingClientRect() {
+        return { width: el.width, height: el.height };
+      },
+      contains(other) {
+        if (other === el) return true;
+        return el.children.some((child) => child.contains(other));
+      },
+      querySelectorAll(selector) {
+        const all = [];
+        (function walk(item) {
+          all.push(item);
+          for (const child of item.children) walk(child);
+        })(el);
+        if (selector === "video") return all.filter((item) => item.tag === "video");
+        if (selector.includes("video-ad-countdown")) return all.filter((item) => item.target === "video-ad-countdown");
+        return [];
+      },
+    };
+    for (const child of el.children) child.parentElement = el;
+    return el;
+  }
+  const main = node("video", { width: 800, height: 450, videoWidth: 1920, readyState: 4 });
+  const corner = node("video", { width: 160, height: 90, videoWidth: 1920, readyState: 4 });
+  const cornerBox = node("div", { className: "pbyp-player", children: [corner] });
+  const banner = node("div", { target: "video-ad-countdown" });
+  const player = node("div", { className: "video-player", children: [main, cornerBox, banner] });
+  const doc = {
+    querySelector(selector) {
+      if (selector === ".video-player" || selector.includes("video-player")) return player;
+      return null;
+    },
+  };
+  const covered = api.coverLiveOverAd(doc);
+  assertEquals(covered.action, "covered");
+  if (covered.live !== corner) throw new Error("the corner video is the picture that stays");
+  if (covered.hidden.length !== 1 || covered.hidden[0] !== main) throw new Error("the commercial video is hidden");
+  if (covered.banners.length !== 1 || covered.banners[0] !== banner) throw new Error("the countdown is hidden");
+
+  const only = node("video", { width: 800, height: 450, videoWidth: 1920, readyState: 4 });
+  const alone = node("div", { className: "video-player", children: [only] });
+  const waiting = api.coverLiveOverAd({
+    querySelector() {
+      return alone;
+    },
+  });
+  assertEquals(waiting.action, "wait");
+  assertEquals(waiting.hidden.length, 0);
+});
+
 Deno.test("the streak row is one stylesheet rule that cannot hide the player", () => {
   assert(source.includes(".save-your-streak-side-nav-row:not(:has(video, .video-player)) { display: none !important; }"), "one rule hides only that row");
 });

@@ -86,15 +86,14 @@ Deno.test("a midroll variant is replaced by the first clean backup and the playe
   const masterUrl = "https://usher.ttvnw.net/api/v2/channel/hls/Some_Channel.m3u8?token=live&sig=live";
   const master = await guard(masterUrl);
   const masterText = await master.text();
-  assert(masterText.includes("https://video.example/pip-variant.m3u8"), "master variants point at the clean backup");
-  assert(!masterText.includes("live-variant.m3u8"), "the ad master is not what the player reads");
-  assert(tokens.some((item) => item.playerType === "picture-by-picture" && item.platform === "web"), "picture-by-picture is probed");
-  assert(tokens.some((item) => item.playerType === "autoplay" && item.platform === "android") || tokens.some((item) => item.playerType === "embed"), "other backup types are probed in parallel");
+  assert(masterText.includes("live-variant.m3u8"), "the player keeps its own ladder");
+  assert(!masterText.includes("pip-variant.m3u8"), "another encode does not replace the ladder");
+  assertEquals(tokens, [], "another encode is not probed for this ladder");
 
   const media = await guard("https://video.example/live-variant.m3u8");
   const mediaText = await media.text();
-  assert(mediaText.includes("https://video.example/live.ts"), "the variant the player already has is answered with backup video");
-  assert(!mediaText.includes("ads.example"), "the ad segment is not in the swapped playlist");
+  assert(mediaText.includes("https://ads.example/ad.ts"), "the player stays on its own segments");
+  assert(!mediaText.includes("https://video.example/live.ts"), "another encode is not spliced in");
   await flushReload();
   assertEquals(reloads, [], "the ad is replaced without setSrc");
 
@@ -160,8 +159,8 @@ Deno.test("a higher-quality clean backup wins when probes finish in the grace wi
   const master = await guard("https://usher.ttvnw.net/api/v2/channel/hls/Some_Channel.m3u8?token=live&sig=live");
   const masterText = await master.text();
   chosen.push(masterText.includes("embed-high.m3u8"), masterText.includes("pip-low.m3u8"));
-  assert(masterText.includes("https://video.example/embed-high.m3u8"), "grace window keeps the closer quality backup");
-  assert(!masterText.includes("pip-low.m3u8"), "lower quality is not preferred when a match exists");
+  assert(!masterText.includes("embed-high.m3u8"), "a closer backup does not replace the ladder");
+  assert(!masterText.includes("pip-low.m3u8"), "a lower backup does not replace the ladder");
 });
 
 Deno.test("embed tokens on the response root still count", async () => {
@@ -187,7 +186,7 @@ Deno.test("embed tokens on the response root still count", async () => {
 
   const master = await guard("https://usher.ttvnw.net/api/v2/channel/hls/Some_Channel.m3u8?token=live&sig=live");
   const masterText = await master.text();
-  assert(masterText.includes("https://video.example/embed-variant.m3u8"), "a root embed token is accepted");
+  assert(!masterText.includes("embed-variant.m3u8"), "an embed ladder does not replace the player");
 });
 
 Deno.test("a stale main variant still returns to main and clears Blocking ads", async () => {
@@ -251,10 +250,11 @@ Deno.test("a stale main variant still returns to main and clears Blocking ads", 
   reloads.length = 0;
   await guard("https://video.example/autoplay-variant.m3u8");
   await flushReload();
+  const restored = await guard(masterUrl);
+  await flushReload();
 
   assertEquals(statuses.at(-1), false, "Blocking ads clears once main is clean again");
   assertEquals(reloads, [], "returning to the main ladder does not setSrc");
-  const restored = await guard(masterUrl);
   assert((await restored.text()).includes("live-variant-v2.m3u8"), "next master uses the rotated live ladder");
 });
 
@@ -306,13 +306,14 @@ Deno.test("failed main probes while on backup fail open instead of freezing", as
   await guard("https://video.example/autoplay-variant.m3u8");
   await flushReload();
 
-  assertEquals(statuses.at(-1), false, "fail open clears the blocking label");
+  assert(statuses.length === 0 || statuses.at(-1) === false, "the label is not stuck on a backup");
   assertEquals(reloads.length, 0, "a dead main does not setSrc");
 });
 
 Deno.test("exhausted dirty backups fail open: pass ads through without reload", async () => {
   const reloads = [];
   const statuses = [];
+  const covers = [];
   const guard = createPlaylistGuard({
     handoffGraceMs: 0,
     async fetch(url) {
@@ -336,6 +337,9 @@ Deno.test("exhausted dirty backups fail open: pass ads through without reload", 
     status(blocking) {
       statuses.push(Boolean(blocking));
     },
+    coverAd(on) {
+      covers.push(on === true);
+    },
   });
 
   const masterUrl = "https://usher.ttvnw.net/api/v2/channel/hls/Some_Channel.m3u8?token=live&sig=live";
@@ -348,8 +352,10 @@ Deno.test("exhausted dirty backups fail open: pass ads through without reload", 
 
   const media = await guard("https://video.example/live-variant.m3u8");
   const mediaText = await media.text();
-  assert(mediaText.includes("ads.example/ad.ts"), "real ad segments pass through unmodified");
-  assert(mediaText.includes("stitched-ad"), "ad markers stay so Twitch midroll UI can run");
+  assert(mediaText.includes("ads.example/ad.ts"), "the player's own segments stay, so the encode does not change");
+  assert(mediaText.includes("stitched-ad"), "ad markers stay so the live corner can open");
+  assert(covers.includes(true), "the page is told to cover the commercial");
+  assert(mediaText.split("\n").some((line) => line.startsWith("https://")), "the buffer is not emptied");
   assertEquals(statuses.at(-1), false, "Blocking ads stays off during fail-open");
   await flushReload();
   assertEquals(reloads, [], "media fail-open pass-through also avoids reload");
@@ -560,13 +566,14 @@ Deno.test("a backup that turns dirty after its probe moves to the next clean typ
   mainAds = true;
   const media = await guard("https://video.example/live-variant.m3u8");
   const mediaText = await media.text();
-  assert(mediaText.includes("https://video.example/pip-live.ts"), "the next clean backup type is served");
-  assert(!mediaText.includes("ads.example"), "the midroll is not passed through while a clean backup exists");
+  assert(mediaText.includes("https://ads.example/ad.ts"), "the player stays on its own segments");
+  assert(!mediaText.includes("pip-live.ts"), "another encode is not spliced in");
   assertEquals(reloads, [], "the clean segments are served without setSrc");
   await flushReload();
   assertEquals(reloads, [], "one reload hands the player to the backup");
-  const next = await guard(masterUrl);
-  assert((await next.text()).includes("https://video.example/pip-variant.m3u8"), "the next master points at the clean type");
+  const nextText = await (await guard(masterUrl)).text();
+  assert(nextText.includes("live-variant.m3u8"), "the next master stays on the player's ladder");
+  assert(!nextText.includes("pip-variant.m3u8"), "the next master is not another encode");
 });
 
 Deno.test("a moving-off guard that no master clears expires, so the next midroll is still caught", async () => {
@@ -610,12 +617,12 @@ Deno.test("a moving-off guard that no master clears expires, so the next midroll
     mainAds = true;
     now += 1000;
     const early = await guard("https://video.example/live-variant.m3u8");
-    assert(!(await early.text()).includes("ads.example"), "the ad segment is still replaced without a reload");
+    assert((await early.text()).includes("ads.example"), "the player stays on its own segments without a reload");
     now += 10000;
     const late = await guard("https://video.example/live-variant.m3u8");
     const lateText = await late.text();
-    assert(!lateText.includes("ads.example"), "after the guard expires the midroll is swapped");
-    assert(lateText.includes("https://video.example/live.ts"), "the backup video is served");
+    assert(lateText.includes("ads.example"), "after the guard the player still stays on its own segments");
+    assert(!lateText.includes("https://video.example/live.ts"), "another encode is not spliced in");
     await flushReload();
     assertEquals(reloads, [], "the new break is blocked without a player reload");
   } finally {
@@ -696,8 +703,8 @@ Deno.test("a clean backup still answering is awaited before the midroll is passe
   state.mainAds = true;
   const media = await guard("https://video.example/live-variant.m3u8");
   const text = await media.text();
-  assert(text.includes("https://video.example/pip-live.ts"), "the late clean backup is served");
-  assert(!text.includes("ads.example"), "the midroll is not passed through");
+  assert(!text.includes("https://video.example/pip-live.ts"), "a late backup does not replace the encode");
+  assert(text.includes("ads.example"), "the player stays on its own segments");
   await flushReload();
   assertEquals(reloads, [], "the clean segments do not need setSrc");
 });
@@ -727,7 +734,8 @@ Deno.test("overlapping main polls share one backup decision", async () => {
   ]);
   for (const response of [first, second]) {
     const text = await response.text();
-    assert(text.includes("https://video.example/pip-live.ts"), "both polls get the clean backup");
+    assert(text.includes("ads.example"), "both polls stay on the player's own segments");
+    assert(!text.includes("pip-live.ts"), "neither poll splices in another encode");
   }
   assertEquals(reloads, [], "no poll reloads the player");
   await flushReload();
@@ -735,7 +743,7 @@ Deno.test("overlapping main polls share one backup decision", async () => {
 });
 
 Deno.test("a backup that gets its own ad plays it through without another reload", async () => {
-  const state = { mainAds: true, autoplayCleanFor: 2 };
+  const state = { mainAds: true, autoplayCleanFor: 1 };
   const reloads = [];
   const statuses = [];
   const guard = createPlaylistGuard({
@@ -752,10 +760,10 @@ Deno.test("a backup that gets its own ad plays it through without another reload
     },
   });
   const master = await guard(masterUrlForTests);
-  assert((await master.text()).includes("autoplay-variant.m3u8"), "the player starts on the first clean backup");
+  assert(!(await master.text()).includes("autoplay-variant.m3u8"), "the player does not start on another encode");
   const onBackup = await guard("https://video.example/autoplay-variant.m3u8");
   assert((await onBackup.text()).includes("https://video.example/live.ts"), "the first backup plays while clean");
-  assertEquals(statuses.at(-1), true, "Blocking ads shows on the clean backup");
+  assertEquals(statuses.at(-1), false, "a clean stream does not move onto a backup");
   const dirty = await guard("https://video.example/autoplay-variant.m3u8");
   assert((await dirty.text()).includes("https://ads.example/ad.ts"), "the backup's own ad passes through");
   assertEquals(statuses.at(-1), false, "Blocking ads is off while that ad plays");
@@ -875,7 +883,7 @@ Deno.test("a stitched range at the live edge swaps before any ad segment is list
   const media = await guard("https://video.example/live-variant.m3u8");
   const cueText = await media.text();
   assert(cueText.includes("https://video.example/live1.ts"), "the live segment stays in the playlist");
-  assert(!cueText.includes("twitch-stitched-ad"), "the upcoming cue is removed");
+  assert(cueText.includes("twitch-stitched-ad"), "the cue stays so the live corner can open");
   await flushReload();
   assertEquals(reloads, [], "an upcoming cue does not reload the player");
 });
@@ -941,11 +949,12 @@ Deno.test("the ad rung is the one probed after the reload, so a clean first rung
     for (let cycle = 0; cycle < 8; cycle++) {
       state.now += 3000;
       const media = await (await state.guard("https://video.example/b-variant.m3u8")).text();
-      assert(media.includes("pip-live.ts") && !media.includes("ads.example"), "the ad rung is answered with the backup");
+      assert(media.includes("ads.example") && !media.includes("pip-live.ts"), "the ad rung stays on its own encode");
       await flushReload();
       state.now += 400;
       const master = await (await state.guard(masterUrlForTests)).text();
-      assert(!media.includes("ads.example"), "the ad rung is not passed through");
+      assert(media.includes("ads.example"), "the ad rung stays on its own segments");
+      assert(!master.includes("pip-variant.m3u8"), "the master stays off the backup ladder");
       await flushReload();
     }
     assertEquals(state.reloads.length, 0, "no setSrc for the whole break");
@@ -970,7 +979,7 @@ Deno.test("a swap undone by the next master holds on main instead of looping rel
       await flushReload();
     }
     assertEquals(state.reloads.length, 0, "a false clean probe does not reload: " + state.reloads.length);
-    assertEquals(passedThrough, 0, "inf segments are not passed through: " + passedThrough);
+    assert(passedThrough > 0, "the player's own segments stay in the playlist: " + passedThrough);
     assert(maxReloadsInAnyMinute(state.reloads) <= 2, "at most 2 reloads in any 60 s");
 
     state.bAds = false;
@@ -1013,7 +1022,8 @@ Deno.test("a normal break replaces the commercial and does not reload", async ()
     state.now += 1000;
     const during = await (await state.guard("https://video.example/b-variant.m3u8")).text();
     await flushReload();
-    assert(!during.includes("ads.example"), "the main playlist is not the commercial");
+    assert(during.includes("ads.example"), "the playlist keeps its own segments");
+    assert(!during.includes("pip-live.ts"), "another encode is not spliced in");
     assert(during.split("\n").some((line) => line.startsWith("https://")), "the playlist still has a segment");
     assertEquals(state.reloads.length, 0, "the break does not reload the player");
     state.now += 20000;
@@ -1048,7 +1058,7 @@ Deno.test("main's ad flag flickering while on backup does not make a reload pair
     const total = state.now - 1700000000000;
     assert(total > 300000, "the simulation covers five minutes");
     assertEquals(state.reloads.length, 0, "flicker does not reload the player: " + state.reloads.length);
-    assertEquals(passedThrough, 0, "inf segments are not passed through: " + passedThrough);
+    assert(passedThrough > 0, "the player's own segments stay in the playlist: " + passedThrough);
     assert(maxReloadsInAnyMinute(state.reloads) <= 2, "at most 2 reloads in any 60 s");
   } finally {
     state.restore();
@@ -1119,13 +1129,14 @@ Deno.test("two guards share one ceiling when the page gives them one ring", asyn
     ring.claim();
     const media = await (await second("https://video.example/b-variant.m3u8")).text();
     await flushReload();
-    assert(!media.includes("ads.example"), "the ad is replaced without using the other guard's reload");
+    assert(media.includes("ads.example"), "the ad poll stays on its own segments");
+    assert(!media.includes("pip-live.ts"), "the other guard's ladder is not spliced in");
     assert(media.split("\n").some((line) => line.startsWith("https://")), "the playlist is not empty");
     assertEquals(ring.stamps.length, 2, "the two earlier claims stay, and the ad does not add a setSrc");
     ring.now += 61000;
     const swapped = await (await first("https://video.example/b-variant.m3u8")).text();
     await flushReload();
-    assert(swapped.includes("pip-live.ts"), "the swap works again once the ring has room");
+    assert(swapped.includes("ads.example"), "the later poll still stays on its own segments");
   } finally {
     ring.restore();
   }
@@ -1141,8 +1152,8 @@ Deno.test("a full reload ceiling still replaces the commercial and does not setS
     ring.claim();
     const media = await (await guard("https://video.example/b-variant.m3u8")).text();
     await flushReload();
-    assert(!media.includes("ads.example"), "the commercial is not in the playlist");
-    assert(media.includes("pip-live.ts"), "a live segment takes the ad slot");
+    assert(media.includes("ads.example"), "the playlist keeps its own segments");
+    assert(!media.includes("pip-live.ts"), "another encode is not spliced in");
     assert(media.split("\n").some((line) => line.startsWith("https://")), "the playlist is not empty");
     assertEquals(ring.stamps.length, 2, "the ceiling stays full and the ad does not add a setSrc");
     ring.bAds = false;
@@ -1154,7 +1165,7 @@ Deno.test("a full reload ceiling still replaces the commercial and does not setS
     ring.now += 5000;
     const again = await (await guard("https://video.example/b-variant.m3u8")).text();
     await flushReload();
-    assert(!again.includes("ads.example"), "a later break is still replaced");
+    assert(again.includes("ads.example"), "a later break still stays on its own segments");
     assert(again.split("\n").filter((line) => line.startsWith("https://")).length >= 1, "the later playlist still has video");
     assertEquals(ring.stamps.length, 2, "still no setSrc");
   } finally {
@@ -1171,8 +1182,8 @@ Deno.test("a worker replaces the commercial without asking the page for setSrc",
     ring.now += 30000;
     const media = await (await worker("https://video.example/b-variant.m3u8")).text();
     await flushReload();
-    assert(!media.includes("ads.example"), "the commercial is not in the playlist");
-    assert(media.includes("pip-live.ts"), "a live segment takes the ad slot");
+    assert(media.includes("ads.example"), "the playlist keeps its own segments");
+    assert(!media.includes("pip-live.ts"), "another encode is not spliced in");
     assert(media.split("\n").some((line) => line.startsWith("https://")), "the playlist is not empty");
     assertEquals(ring.stamps.length, 1, "the ad does not add a setSrc");
     assertEquals(ring.refusals, 0, "the worker does not ask for a reload");
@@ -1239,11 +1250,11 @@ Deno.test("a 1080p break uses the matching backup rung, not the 160p rung listed
   ].join("\n");
   await guard(masterUrlForTests);
   const body = await (await guard("https://video.example/hd-variant.m3u8")).text();
-  assert(body.includes("hd-live-1.ts") && body.includes("hd-live-2.ts"), "the 1080p backup segments are served");
-  assert(!body.includes("low-live.ts"), "the 160p rung is not what the 1080p player reads");
-  assert(!body.includes("hd-ad-"), "the commercial segments are not in the playlist");
+  assert(body.includes("hd-ad-1.ts") && body.includes("hd-ad-2.ts"), "the 1080p player keeps its own segments");
+  assert(!body.includes("low-live.ts"), "the 160p rung is not spliced in");
+  assert(!body.includes("hd-live-"), "another encode is not spliced in");
   assertEquals(body.split("\n").filter((line) => line.startsWith("https://")).length, 2, "both slots stay filled");
-  assertEquals(body.split("\n").filter((line) => line === "#EXT-X-DISCONTINUITY").length, 1, "the switch is one discontinuity");
+  assertEquals(body.split("\n").filter((line) => line === "#EXT-X-DISCONTINUITY").length, 0, "the encode is not switched");
   await flushReload();
   assertEquals(reloads, [], "matching the rung does not setSrc");
 });
@@ -1321,19 +1332,20 @@ Deno.test("upcoming then inf at 1920x1080 never reloads and does not play the in
     media = upcoming;
     const cue = await (await guard("https://video.example/hd-variant.m3u8")).text();
     assert(cue.includes("https://video.example/hd-live-1.ts"), "the upcoming poll still has the live segment");
-    assert(!cue.includes("twitch-stitched-ad"), "the upcoming cue is not left for the player");
+    assert(cue.includes("twitch-stitched-ad"), "the upcoming cue stays with the player's own segments");
     await flushReload();
     for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
     media = inf;
     for (let poll = 0; poll < 8; poll++) {
       const body = await (await guard("https://video.example/hd-variant.m3u8")).text();
-      assert(!body.includes("hd-ad-1.ts") && !body.includes("hd-ad-2.ts"), "inf segments are not what the player reads");
-      assert(body.includes("backup-live-"), "the same playlist still has video");
+      assert(body.includes("hd-ad-1.ts") && body.includes("hd-live-1.ts"), "the player keeps its own segments");
+      assert(!body.includes("backup-live-"), "another encode is not spliced in");
       assert(body.split("\n").filter((line) => line.startsWith("https://")).length >= 2, "the buffer is not emptied");
       await flushReload();
     }
     assertEquals(reloads, [], "this shape never calls setSrc");
-    assert(!traces.some((line) => line.includes("pass-midroll")), "inf is not passed through");
+    assert(traces.some((line) => line.includes("cover-ad")), "the commercial is covered instead of spliced");
+    assert(!traces.some((line) => line.includes("inf-replaced")), "segments are not swapped to another encode");
     assert(traces.some((line) => line.includes("ad-seen upcoming 1920x1080")), "the 1080p upcoming cue is seen");
     assert(traces.some((line) => line.includes("ad-seen inf 1920x1080")), "the 1080p inf break is seen");
   } finally {
