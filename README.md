@@ -12,25 +12,25 @@ A Chrome extension that blocks ads on Twitch live streams and YouTube. It is fre
 
 ## What it does
 
-- **Twitch live:** during a midroll the stream stays on the same encode (no player reload). When Twitch shows a corner live picture, that corner covers the commercial and the ad is silenced. When there is no corner, the ad sound is muted; the ad picture may still show. If covering would take the only picture, the ad plays.
+- **Twitch live:** during a midroll the stream stays on the same encode (no player reload). When Twitch shows a corner live picture, that corner covers the commercial and the ad is silenced. When there is no corner, a blank cover hides the ad picture and the sound is muted. If covering would take the only picture, the ad plays.
 - **YouTube:** removes player ads and the Sponsored cards on the home page.
 - VODs and clips pass through untouched.
 
-## Current beta: v0.1.23
+## Current beta: v0.1.24
 
-<img src="docs/whats-new.png" width="800" alt="What's new: midrolls stay on the same encode with no player reload; corner live covers the commercial and silences it; only-video ads are muted; YouTube blocking label clears after skip">
+<img src="docs/whats-new.png" width="800" alt="What's new: midrolls stay on the same encode with no player reload; blank cover hides only-video ads; corner live still covers the commercial; YouTube blocking label clears after skip">
 
-Try this build if you want the no-reload midroll path. Ads are silenced; the picture may still show when Twitch does not mount a corner. The safe stable build remains [v0.1.22](https://github.com/gecko-of-shadow/twitch-adblock/releases/tag/v0.1.22).
+Try this build if you want the no-reload midroll path. A dark blank cover hides the ad picture when Twitch does not mount a corner. The safe stable build remains [v0.1.22](https://github.com/gecko-of-shadow/twitch-adblock/releases/tag/v0.1.22).
 
 A small debug popup is **on by default for now (temporary)**. It keeps a short log in memory on your device, hides login tokens, and sends nothing out. Open the extension popup to turn it off or to copy the log if you need to report a problem.
 
-Details are in the [v0.1.23 release notes](https://github.com/gecko-of-shadow/twitch-adblock/releases/tag/v0.1.23).
+Details are in the [v0.1.24 release notes](https://github.com/gecko-of-shadow/twitch-adblock/releases/tag/v0.1.24).
 
 ## Install
 
 <img src="docs/install-steps.png" width="500" alt="How to install twitch-adblock in 6 steps">
 
-**[Download twitch-adblock-0.1.23.zip](https://github.com/gecko-of-shadow/twitch-adblock/releases/download/v0.1.23/twitch-adblock-0.1.23.zip)**
+**[Download twitch-adblock-0.1.24.zip](https://github.com/gecko-of-shadow/twitch-adblock/releases/download/v0.1.24/twitch-adblock-0.1.24.zip)**
 
 1. Download the zip above and unzip it.
 2. Open `chrome://extensions` and turn on **Developer mode**.

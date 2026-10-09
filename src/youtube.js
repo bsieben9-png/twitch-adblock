@@ -345,7 +345,7 @@ function startYoutubeAdblock() {
         type: "state",
         on: debug.on === true,
         text: debug.dump(),
-        version: debug.version || "0.1.23",
+        version: debug.version || "0.1.24",
         gen: data.gen,
       }, "*");
     } catch {
