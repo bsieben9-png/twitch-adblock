@@ -581,20 +581,25 @@
     coveredNodes.push({ el, css: el.style ? el.style.cssText || "" : "" });
     el.style.cssText = cssText;
   }
-  function holdQuiet(el) {
+  function holdQuiet(el, opts) {
     if (!el) return;
+    const next = opts || {};
     if (!heldQuiet.has(el)) {
-      const prior = quietCoveredMedia(el);
+      const prior = quietCoveredMedia(el, next);
       const onPlay = () => {
         if (!coverWanted || !heldQuiet.has(el)) return;
-        quietCoveredMedia(el);
+        const state = heldQuiet.get(el);
+        quietCoveredMedia(el, state && state.opts);
       };
       try { el.addEventListener("play", onPlay, true); } catch { /* not an event target */ }
       try { el.addEventListener("volumechange", onPlay, true); } catch { /* not an event target */ }
-      heldQuiet.set(el, { prior, onPlay });
+      heldQuiet.set(el, { prior, onPlay, opts: next });
       return;
     }
-    quietCoveredMedia(el);
+    const state = heldQuiet.get(el);
+    // A later covered corner can upgrade mute-only to mute+pause.
+    if (next.pause !== false) state.opts = { pause: true };
+    quietCoveredMedia(el, state.opts);
   }
   function releaseQuiet() {
     for (const [el, state] of heldQuiet) {
@@ -653,7 +658,17 @@
       trace("cover", "fail-open");
       return;
     }
-    if (!plan || plan.action !== "covered") return;
+    if (!plan || plan.action !== "covered") {
+      const reason = plan && plan.action ? plan.action : "none";
+      trace("cover", reason);
+      // Only-video commercial: no corner to promote. Mute ad audio without
+      // pausing or hiding the only picture (that would blank the player).
+      if (plan && plan.action === "wait") {
+        for (const video of plan.mute || []) holdQuiet(video, { pause: false });
+        for (const audio of plan.audios || []) holdQuiet(audio);
+      }
+      return;
+    }
     releaseCover();
     const player = plan.player;
     if (player && player.style && (!player.style.position || player.style.position === "static")) {
@@ -759,11 +774,11 @@ function isVodOrClipLocation(loc) {
 // page is left alone. If the only picture sits inside the ad player, do nothing.
 // The commercial stays in the main video element so that element is not reloaded.
 // When Twitch also has the live picture in a corner video, that corner fills the
-// player and the commercial video is hidden. One video is left alone: hiding it
-// would blank the only picture.
+// player and the commercial video is hidden. One video cannot be hidden or paused:
+// that would blank the only picture. Mute its audio instead while cover waits.
 function coverLiveOverAd(doc) {
   const player = doc.querySelector(".video-player") || doc.querySelector("[data-a-target='video-player']");
-  if (!player) return { action: "none", player: null, hidden: [], live: null, banners: [] };
+  if (!player) return { action: "none", player: null, hidden: [], live: null, banners: [], audios: [], mute: [] };
   const videos = [...player.querySelectorAll("video")];
   function areaOf(video) {
     if (!video.getBoundingClientRect) return 0;
@@ -784,49 +799,60 @@ function coverLiveOverAd(doc) {
     if (typeof video.videoWidth === "number" && video.videoWidth === 0 && video.readyState === 0) return false;
     return true;
   }
+  function collectAdAudios(live) {
+    const audios = [];
+    if (player.querySelectorAll) {
+      for (const audio of player.querySelectorAll("audio")) {
+        if (audio === live || inCorner(audio)) continue;
+        audios.push(audio);
+      }
+    }
+    if (doc.querySelectorAll) {
+      for (const audio of doc.querySelectorAll("audio")) {
+        if (audios.includes(audio) || audio === live || inCorner(audio)) continue;
+        const name = String(audio.className || "") + " " + (audio.getAttribute ? String(audio.getAttribute("data-a-target") || "") : "");
+        if (/commercial|video-ad|ad-audio|adsound/i.test(name)) audios.push(audio);
+      }
+    }
+    return audios;
+  }
   const corner = videos.find((video) => inCorner(video) && hasPicture(video)) || null;
   let live = corner;
   if (!live && videos.length >= 2) {
     const ready = videos.filter(hasPicture);
     if (ready.length >= 2) live = ready.slice().sort((left, right) => areaOf(left) - areaOf(right))[0];
   }
-  if (!live) return { action: "wait", player, hidden: [], live: null, banners: [], audios: [] };
+  if (!live) {
+    // No second live picture to promote without a player reload. Mute commercial audio.
+    const mute = videos.filter(hasPicture);
+    return { action: "wait", player, hidden: [], live: null, banners: [], audios: collectAdAudios(null), mute };
+  }
   const hidden = videos.filter((video) => video !== live);
-  if (!hidden.length) return { action: "wait", player, hidden: [], live, banners: [], audios: [] };
+  if (!hidden.length) {
+    // Only the live corner exists — do not mute live as if it were a commercial.
+    return { action: "wait", player, hidden: [], live, banners: [], audios: [], mute: [] };
+  }
   const banners = [];
   for (const el of player.querySelectorAll("[data-a-target='video-ad-countdown'], [data-a-target='video-ad-label'], [class*='commercial-break']")) {
     if (el.contains && el.contains(live)) continue;
     banners.push(el);
   }
-  const audios = [];
-  if (player.querySelectorAll) {
-    for (const audio of player.querySelectorAll("audio")) {
-      if (audio === live || inCorner(audio)) continue;
-      audios.push(audio);
-    }
-  }
-  if (doc.querySelectorAll) {
-    for (const audio of doc.querySelectorAll("audio")) {
-      if (audios.includes(audio) || audio === live || inCorner(audio)) continue;
-      const name = String(audio.className || "") + " " + (audio.getAttribute ? String(audio.getAttribute("data-a-target") || "") : "");
-      if (/commercial|video-ad|ad-audio|adsound/i.test(name)) audios.push(audio);
-    }
-  }
-  return { action: "covered", player, hidden, live, banners, audios };
+  return { action: "covered", player, hidden, live, banners, audios: collectAdAudios(live), mute: [] };
 }
 
-// Mute and pause a covered commercial. The corner live video is not passed here.
-// The only video is never passed here, so the player is not blanked.
-function quietCoveredMedia(el) {
+// Mute (and optionally pause) commercial media. The corner live video is not
+// passed here. The only video may be muted without pause so the picture stays.
+function quietCoveredMedia(el, opts) {
+  const shouldPause = !opts || opts.pause !== false;
   const prior = {
     muted: el.muted === true,
     paused: el.paused === true,
     volume: typeof el.volume === "number" ? el.volume : null,
   };
-  if (prior.muted && prior.paused && (prior.volume == null || prior.volume === 0)) return prior;
+  if (prior.muted && (prior.volume == null || prior.volume === 0) && (!shouldPause || prior.paused)) return prior;
   try { el.muted = true; } catch { /* ignore */ }
   try { if (typeof el.volume === "number") el.volume = 0; } catch { /* ignore */ }
-  try { if (!prior.paused && typeof el.pause === "function") el.pause(); } catch { /* ignore */ }
+  try { if (shouldPause && !prior.paused && typeof el.pause === "function") el.pause(); } catch { /* ignore */ }
   return prior;
 }
 
