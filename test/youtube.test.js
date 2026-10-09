@@ -195,6 +195,27 @@ Deno.test("dom selectors remove banners and overlays and leave the video element
   assert(source.includes("!node.childElementCount"), "an empty overlay is not removed");
 });
 
+Deno.test("later ad checks do not keep the blocking label up for the whole video", () => {
+  const clearMs = api.labelClearMs;
+  assert(clearMs > 0 && clearMs < 8000, "the label does not sit for 8 seconds");
+  let state = api.planLabel(null, { type: "clear", now: 0 });
+  assertEquals(state.done, false, "a clean response before any skip does not latch the label off");
+  state = api.planLabel(state, { type: "block", now: 1700 });
+  assertEquals(state.show, true);
+  assertEquals(state.clearAt, 1700 + clearMs);
+  state = api.planLabel(state, { type: "block", now: 1700 + clearMs - 1 });
+  assertEquals(state.clearAt, 1700 + clearMs, "a later block does not extend the clear");
+  state = api.planLabel(state, { type: "tick", now: 1700 + clearMs });
+  assertEquals(state.show, false);
+  assertEquals(state.done, true);
+  state = api.planLabel(state, { type: "block", now: 60000 });
+  assertEquals(state.show, false, "the label stays off after the skip is done");
+  state = api.planLabel(state, { type: "navigate", now: 61000 });
+  state = api.planLabel(state, { type: "block", now: 61000 });
+  assertEquals(state.show, true, "the next video can show the label once");
+  assert(!source.includes("}, 8000);"), "the old 8 second reset timer is gone");
+});
+
 Deno.test("the youtube script does not swap media or phone home", () => {
   assert(!source.includes(".currentTime"), "do not seek the picture");
   assert(!source.includes("playbackRate"), "do not fast-forward an ad");
