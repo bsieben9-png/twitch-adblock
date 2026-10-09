@@ -566,10 +566,10 @@
   const coveredNodes = [];
   let coverWanted = false;
   let coverObserver = null;
+  const heldQuiet = new Map();
   function releaseCover() {
     for (const item of coveredNodes) {
       try {
-        if (item.muted != null && item.el.muted !== item.muted) item.el.muted = item.muted;
         item.el.style.cssText = item.css;
       } catch {
         // The node is already gone.
@@ -577,13 +577,47 @@
     }
     coveredNodes.length = 0;
   }
-  function rememberStyle(el, cssText, muted) {
-    coveredNodes.push({ el, css: el.style ? el.style.cssText || "" : "", muted: muted == null ? null : muted });
+  function rememberStyle(el, cssText) {
+    coveredNodes.push({ el, css: el.style ? el.style.cssText || "" : "" });
     el.style.cssText = cssText;
+  }
+  function holdQuiet(el) {
+    if (!el) return;
+    if (!heldQuiet.has(el)) {
+      const prior = quietCoveredMedia(el);
+      const onPlay = () => {
+        if (!coverWanted || !heldQuiet.has(el)) return;
+        quietCoveredMedia(el);
+      };
+      try { el.addEventListener("play", onPlay, true); } catch { /* not an event target */ }
+      try { el.addEventListener("volumechange", onPlay, true); } catch { /* not an event target */ }
+      heldQuiet.set(el, { prior, onPlay });
+      return;
+    }
+    quietCoveredMedia(el);
+  }
+  function releaseQuiet() {
+    for (const [el, state] of heldQuiet) {
+      try { el.removeEventListener("play", state.onPlay, true); } catch { /* already gone */ }
+      try { el.removeEventListener("volumechange", state.onPlay, true); } catch { /* already gone */ }
+      const prior = state.prior;
+      try { if (prior.volume != null) el.volume = prior.volume; } catch { /* ignore */ }
+      try { el.muted = prior.muted; } catch { /* ignore */ }
+      if (!prior.paused && el.paused && typeof el.play === "function") {
+        try {
+          const pending = el.play();
+          if (pending && typeof pending.catch === "function") pending.catch(() => {});
+        } catch {
+          // The stream can be resumed by Twitch if play() is refused.
+        }
+      }
+    }
+    heldQuiet.clear();
   }
   function noteCoverAd(on) {
     if (isVodOrClipLocation(location)) {
       coverWanted = false;
+      releaseQuiet();
       releaseCover();
       if (coverObserver) coverObserver.disconnect();
       coverObserver = null;
@@ -591,6 +625,7 @@
     }
     coverWanted = on === true;
     if (!coverWanted) {
+      releaseQuiet();
       releaseCover();
       if (coverObserver) coverObserver.disconnect();
       coverObserver = null;
@@ -625,14 +660,10 @@
       rememberStyle(player, (player.style.cssText || "") + ";position:relative;");
     }
     for (const video of plan.hidden) {
-      const wasMuted = video.muted === true;
-      try {
-        video.muted = true;
-      } catch {
-        // A video we cannot mute stays audible until the break ends.
-      }
-      rememberStyle(video, (video.style.cssText || "") + ";visibility:hidden !important;", wasMuted);
+      holdQuiet(video);
+      rememberStyle(video, (video.style.cssText || "") + ";visibility:hidden !important;");
     }
+    for (const audio of plan.audios || []) holdQuiet(audio);
     let node = plan.live;
     const top = player || null;
     let depth = 0;
@@ -692,9 +723,8 @@
   // player reload listens for visibilitychange. hidden is already spoofed.
   document.addEventListener("visibilitychange", () => {
     const video = document.querySelector("video");
-    if (video && video.paused && !video.ended) {
-      video.play().catch(() => {});
-    }
+    if (!video || !video.paused || video.ended || heldQuiet.has(video)) return;
+    video.play().catch(() => {});
   }, true);
 
   try {
@@ -760,15 +790,44 @@ function coverLiveOverAd(doc) {
     const ready = videos.filter(hasPicture);
     if (ready.length >= 2) live = ready.slice().sort((left, right) => areaOf(left) - areaOf(right))[0];
   }
-  if (!live) return { action: "wait", player, hidden: [], live: null, banners: [] };
+  if (!live) return { action: "wait", player, hidden: [], live: null, banners: [], audios: [] };
   const hidden = videos.filter((video) => video !== live);
-  if (!hidden.length) return { action: "wait", player, hidden: [], live, banners: [] };
+  if (!hidden.length) return { action: "wait", player, hidden: [], live, banners: [], audios: [] };
   const banners = [];
   for (const el of player.querySelectorAll("[data-a-target='video-ad-countdown'], [data-a-target='video-ad-label'], [class*='commercial-break']")) {
     if (el.contains && el.contains(live)) continue;
     banners.push(el);
   }
-  return { action: "covered", player, hidden, live, banners };
+  const audios = [];
+  if (player.querySelectorAll) {
+    for (const audio of player.querySelectorAll("audio")) {
+      if (audio === live || inCorner(audio)) continue;
+      audios.push(audio);
+    }
+  }
+  if (doc.querySelectorAll) {
+    for (const audio of doc.querySelectorAll("audio")) {
+      if (audios.includes(audio) || audio === live || inCorner(audio)) continue;
+      const name = String(audio.className || "") + " " + (audio.getAttribute ? String(audio.getAttribute("data-a-target") || "") : "");
+      if (/commercial|video-ad|ad-audio|adsound/i.test(name)) audios.push(audio);
+    }
+  }
+  return { action: "covered", player, hidden, live, banners, audios };
+}
+
+// Mute and pause a covered commercial. The corner live video is not passed here.
+// The only video is never passed here, so the player is not blanked.
+function quietCoveredMedia(el) {
+  const prior = {
+    muted: el.muted === true,
+    paused: el.paused === true,
+    volume: typeof el.volume === "number" ? el.volume : null,
+  };
+  if (prior.muted && prior.paused && (prior.volume == null || prior.volume === 0)) return prior;
+  try { el.muted = true; } catch { /* ignore */ }
+  try { if (typeof el.volume === "number") el.volume = 0; } catch { /* ignore */ }
+  try { if (!prior.paused && typeof el.pause === "function") el.pause(); } catch { /* ignore */ }
+  return prior;
 }
 
 function skipLiveClientAd(doc, loc) {

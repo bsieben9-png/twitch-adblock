@@ -137,6 +137,9 @@ Deno.test("visibilitychange does not block Twitch chat reconnect listeners", () 
   const block = source.slice(start, start + 350);
   assert(!block.includes("stopImmediatePropagation"), "do not swallow other visibilitychange listeners after player reload");
   assert(block.includes("video.play()"), "still resume a paused video when the tab changes");
+  assert(block.includes("heldQuiet.has(video)"), "a covered commercial is not resumed when the tab changes");
+  assert(source.includes("function quietCoveredMedia"), "covered commercial media is muted and paused");
+  assert(!source.slice(source.indexOf("function quietCoveredMedia"), source.indexOf("function skipLiveClientAd")).includes("setSrc"), "quieting a commercial does not reload the player");
 });
 
 Deno.test("only player-looking workers get the playlist prelude", () => {
@@ -285,7 +288,7 @@ Deno.test("a live client-side ad player is hidden and a vod ad player is left al
 Deno.test("a corner live video covers the commercial and the only video is left alone", () => {
   const start = source.indexOf("function isVodOrClipLocation");
   const end = source.indexOf("function startTwitchAdblockWorker", start);
-  const api = new Function(`${source.slice(start, end)}\nreturn { coverLiveOverAd };`)();
+  const api = new Function(`${source.slice(start, end)}\nreturn { coverLiveOverAd, quietCoveredMedia };`)();
   function node(tag, opts) {
     const el = {
       tag,
@@ -316,6 +319,7 @@ Deno.test("a corner live video covers the commercial and the only video is left 
           for (const child of item.children) walk(child);
         })(el);
         if (selector === "video") return all.filter((item) => item.tag === "video");
+        if (selector === "audio") return all.filter((item) => item.tag === "audio");
         if (selector.includes("video-ad-countdown")) return all.filter((item) => item.target === "video-ad-countdown");
         return [];
       },
@@ -325,9 +329,11 @@ Deno.test("a corner live video covers the commercial and the only video is left 
   }
   const main = node("video", { width: 800, height: 450, videoWidth: 1920, readyState: 4 });
   const corner = node("video", { width: 160, height: 90, videoWidth: 1920, readyState: 4 });
-  const cornerBox = node("div", { className: "pbyp-player", children: [corner] });
+  const cornerAudio = node("audio", {});
+  const cornerBox = node("div", { className: "pbyp-player", children: [corner, cornerAudio] });
+  const adAudio = node("audio", { className: "commercial-audio" });
   const banner = node("div", { target: "video-ad-countdown" });
-  const player = node("div", { className: "video-player", children: [main, cornerBox, banner] });
+  const player = node("div", { className: "video-player", children: [main, cornerBox, banner, adAudio] });
   const doc = {
     querySelector(selector) {
       if (selector === ".video-player" || selector.includes("video-player")) return player;
@@ -339,6 +345,17 @@ Deno.test("a corner live video covers the commercial and the only video is left 
   if (covered.live !== corner) throw new Error("the corner video is the picture that stays");
   if (covered.hidden.length !== 1 || covered.hidden[0] !== main) throw new Error("the commercial video is hidden");
   if (covered.banners.length !== 1 || covered.banners[0] !== banner) throw new Error("the countdown is hidden");
+  if (!covered.audios.includes(adAudio)) throw new Error("a separate ad audio element is muted");
+  if (covered.audios.includes(cornerAudio) || covered.audios.includes(corner)) throw new Error("the corner live audio stays on");
+  const commercial = { muted: false, paused: false, volume: 0.8, pause() { this.paused = true; } };
+  const prior = api.quietCoveredMedia(commercial);
+  assertEquals(commercial.muted, true);
+  assertEquals(commercial.paused, true);
+  assertEquals(commercial.volume, 0);
+  assertEquals(prior.muted, false);
+  assertEquals(prior.paused, false);
+  api.quietCoveredMedia(commercial);
+  assertEquals(commercial.paused, true);
 
   const only = node("video", { width: 800, height: 450, videoWidth: 1920, readyState: 4 });
   const alone = node("div", { className: "video-player", children: [only] });
