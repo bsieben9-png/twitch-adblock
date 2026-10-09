@@ -1127,6 +1127,8 @@ function createPlaylistGuard(env) {
     session.failOpenReloaded = false;
     session.served = "";
     session.servedCleanUrl = "";
+    session.backupMaster = "";
+    session.backupHref = "";
     session.spares = [];
     session.round = null;
     session.backupUrls.clear();
@@ -1150,6 +1152,8 @@ function createPlaylistGuard(env) {
     session.usingBackup = false;
     session.served = "";
     session.servedCleanUrl = "";
+    session.backupMaster = "";
+    session.backupHref = "";
     session.spares = [];
     session.round = null;
     session.backupUrls.clear();
@@ -1381,6 +1385,8 @@ function createPlaylistGuard(env) {
     session.failOpenReloaded = false;
     session.served = playlist.mapVariantsToBackup(liveText, best.master, best.href);
     session.servedCleanUrl = best.cleanUrl || "";
+    session.backupMaster = best.master || "";
+    session.backupHref = best.href || "";
     if (!session.usingBackup) session.backupAt = Date.now();
     session.usingBackup = true;
     session.retryAt = Date.now() + 30000;
@@ -1490,74 +1496,115 @@ function createPlaylistGuard(env) {
     });
   }
 
-  function primeCleanSegments(session, channel) {
-    if (session.cleanSegmentPromise) return;
-    session.cleanSegmentPromise = loadCleanSegments(session, channel).then((urls) => {
+  function segmentKey(want) {
+    return want && want.resolution ? String(want.resolution) : "";
+  }
+
+  function primeCleanSegments(session, channel, want) {
+    const key = segmentKey(want);
+    if (session.cleanSegmentPromise && session.cleanSegmentKey === key && session.cleanSegments && session.cleanSegments.length) return;
+    session.cleanSegmentKey = key;
+    session.cleanSegments = [];
+    session.cleanSegmentPromise = loadCleanSegments(session, channel, want).then((urls) => {
+      if (session.cleanSegmentKey !== key) return session.cleanSegments || [];
       session.cleanSegments = urls || [];
       return session.cleanSegments;
     }).catch(() => {
-      session.cleanSegments = [];
+      if (session.cleanSegmentKey === key) session.cleanSegments = [];
       return [];
     });
   }
 
-  async function readyCleanSegments(session, channel) {
-    if (session.cleanSegments && session.cleanSegments.length) return session.cleanSegments;
-    primeCleanSegments(session, channel);
+  async function readyCleanSegments(session, channel, want) {
+    const key = segmentKey(want);
+    if (session.cleanSegmentKey === key && session.cleanSegments && session.cleanSegments.length) return session.cleanSegments;
+    primeCleanSegments(session, channel, want);
     let timer;
     try {
       return await Promise.race([
         session.cleanSegmentPromise,
         new Promise((resolve) => {
-          timer = setTimeout(() => resolve(session.cleanSegments || []), probeDeadlineMs);
+          timer = setTimeout(() => resolve(session.cleanSegmentKey === key ? (session.cleanSegments || []) : []), probeDeadlineMs);
         }),
       ]);
     } catch {
-      return session.cleanSegments || [];
+      return session.cleanSegmentKey === key ? (session.cleanSegments || []) : [];
     } finally {
       if (timer) clearTimeout(timer);
     }
   }
 
-  async function loadCleanSegments(session, channel) {
+  async function segmentsFromMaster(master, href, want) {
+    if (!master) return [];
+    const ordered = [];
+    const picked = playlist.pickVariant(master, want || null);
+    if (picked) ordered.push(absoluteVariant(picked, href));
+    const rest = playlist.listVariants(master).slice().sort((left, right) => {
+      const area = (value) => {
+        const parts = String(value || "").split("x").map(Number);
+        return parts.length === 2 && parts.every((part) => Number.isFinite(part)) ? parts[0] * parts[1] : 0;
+      };
+      return area(right.resolution) - area(left.resolution);
+    });
+    for (const variant of rest) {
+      const abs = absoluteVariant(variant.url, href);
+      if (abs && !ordered.includes(abs)) ordered.push(abs);
+    }
+    for (const mediaUrl of ordered) {
+      const body = await fetchPlaylist(mediaUrl);
+      if (!body || playlist.hasAdBreak(body)) continue;
+      const urls = playlist.liveSegmentUrls(body, mediaUrl);
+      if (urls.length) return urls;
+    }
+    return [];
+  }
+
+  function rungMatches(master, href, want) {
+    if (!want || !want.resolution || !master) return true;
+    const picked = playlist.pickVariant(master, want);
+    if (!picked) return false;
+    const abs = absoluteVariant(picked, href);
+    const variant = playlist.listVariants(master).find((item) => absoluteVariant(item.url, href) === abs);
+    return Boolean(variant && variant.resolution === want.resolution);
+  }
+
+  async function loadCleanSegments(session, channel, want) {
     const masterUrl = session.masterUrl;
     const liveText = session.liveMaster;
     if (!masterUrl || !liveText || !channel) return [];
-    if (session.servedCleanUrl) {
-      const known = await fetchPlaylist(session.servedCleanUrl);
-      const knownUrls = known ? playlist.liveSegmentUrls(known, session.servedCleanUrl) : [];
-      if (knownUrls.length) return knownUrls;
+    let fallback = [];
+    if (session.backupMaster && session.backupHref) {
+      const known = await segmentsFromMaster(session.backupMaster, session.backupHref, want);
+      if (known.length && rungMatches(session.backupMaster, session.backupHref, want)) return known;
+      if (known.length) fallback = known;
     }
     const found = (await Promise.all(backupTypes.map((playerType) => probeBackupType(channel, masterUrl, liveText, playerType))))
-      .filter((item) => item && item.cleanUrl);
+      .filter((item) => item && item.master);
     found.sort((left, right) => (right.score || 0) - (left.score || 0));
-    const urls = [];
-    const seen = new Set();
     for (const item of found) {
-      const body = await fetchPlaylist(item.cleanUrl);
-      if (!body) continue;
-      for (const segmentUrl of playlist.liveSegmentUrls(body, item.cleanUrl)) {
-        if (seen.has(segmentUrl)) continue;
-        seen.add(segmentUrl);
-        urls.push(segmentUrl);
-      }
-      if (urls.length) break;
+      const urls = await segmentsFromMaster(item.master, item.href, want);
+      if (!urls.length) continue;
+      if (rungMatches(item.master, item.href, want)) return urls;
+      if (!fallback.length) fallback = urls;
     }
-    return urls;
+    return fallback;
   }
 
   async function blockWithoutReload(session, channel, url, text) {
     const reason = playlist.adReason(text);
     const rung = session.variants.get(url) || null;
     trace("playback", "ad-seen " + reason + (rung && rung.resolution ? " " + rung.resolution : ""));
-    if (reason === "upcoming") primeCleanSegments(session, channel);
-    const urls = reason === "upcoming" ? [] : await readyCleanSegments(session, channel);
-    const spliced = playlist.replaceAdSegments(text, urls);
+    if (reason === "upcoming") primeCleanSegments(session, channel, rung);
+    const urls = reason === "upcoming" ? [] : await readyCleanSegments(session, channel, rung);
+    const spliced = playlist.replaceAdSegments(text, urls, !session.spliced);
     if (!spliced.ok) {
       trace("playlist", "inf-no-reload");
       return null;
     }
-    if (spliced.replaced) trace("playlist", "inf-replaced " + spliced.replaced);
+    if (spliced.replaced) {
+      session.spliced = true;
+      trace("playlist", "inf-replaced " + spliced.replaced);
+    }
     return spliced.text;
   }
 
@@ -1685,6 +1732,13 @@ function createPlaylistGuard(env) {
       const channel = streamByUrl.get(url);
       const session = channel ? sessions.get(channel) : null;
       const swapped = await backupMedia(url, text);
+      // The player was decoding backup segments. The first clean main playlist
+      // needs one discontinuity so the decoder resets instead of stalling.
+      let splicedBack = null;
+      if (!swapped && session && session.spliced && !playlist.hasAdBreak(text)) {
+        session.spliced = false;
+        splicedBack = playlist.markDiscontinuity(text);
+      }
       // Midroll ended after fail-open: clear the latch quietly. No reload —
       // the live playlist is already clean; a forced setSrc starved buffers.
       if (session && session.failOpen && !swapped && !playlist.hasAdBreak(text)) {
@@ -1702,7 +1756,7 @@ function createPlaylistGuard(env) {
         trace("playlist", "pass-midroll");
         return textResponse(withoutMafAd(throughLedger(session, text)));
       }
-      const stripped = playlist.stripAds(swapped || text, session ? session.ledger : null);
+      const stripped = playlist.stripAds(swapped || splicedBack || text, session ? session.ledger : null);
       if (stripped.adUrls.length) {
         rememberBlocked(stripped.adUrls);
         trace("playlist", "strip " + stripped.adUrls.length);

@@ -1190,6 +1190,64 @@ Deno.test("a worker replaces the commercial without asking the page for setSrc",
   }
 });
 
+Deno.test("a 1080p break uses the matching backup rung, not the 160p rung listed first", async () => {
+  const reloads = [];
+  const ad = [
+    "#EXTM3U",
+    "#EXT-X-MEDIA-SEQUENCE:8",
+    "#EXTINF:2.000,",
+    "https://video.example/hd-ad-1.ts",
+    "#EXTINF:2.000,",
+    "https://video.example/hd-ad-2.ts",
+  ].join("\n");
+  const lowMaster = [
+    "#EXTM3U",
+    '#EXT-X-STREAM-INF:BANDWIDTH=230000,RESOLUTION=284x160,CODECS="avc1.4D401F",FRAME-RATE=30.000',
+    "https://video.example/low.m3u8",
+  ].join("\n");
+  const embedMaster = [
+    "#EXTM3U",
+    '#EXT-X-STREAM-INF:BANDWIDTH=230000,RESOLUTION=284x160,CODECS="avc1.4D401F",FRAME-RATE=30.000',
+    "https://video.example/embed-low.m3u8",
+    '#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,CODECS="avc1.640028",FRAME-RATE=60.000',
+    "https://video.example/embed-hd.m3u8",
+  ].join("\n");
+  const guard = createPlaylistGuard({
+    handoffGraceMs: 0,
+    async fetch(url) {
+      const value = String(url);
+      if (value.includes("/channel/hls/") && value.includes("token=live")) return playlistResponse(master);
+      if (value.includes("token=embed")) return playlistResponse(embedMaster);
+      if (value.includes("/channel/hls/")) return playlistResponse(lowMaster);
+      if (value.includes("hd-variant")) return playlistResponse(ad);
+      if (value.includes("embed-hd")) return playlistResponse("#EXTM3U\n#EXTINF:2.000,live\nhttps://video.example/hd-live-1.ts\n#EXTINF:2.000,live\nhttps://video.example/hd-live-2.ts");
+      if (value.includes("low") || value.includes("embed-low")) return playlistResponse("#EXTM3U\n#EXTINF:2.000,live\nhttps://video.example/low-live.ts");
+      return new Response("missing", { status: 404 });
+    },
+    async gql(body) {
+      return tokenFor(body);
+    },
+    reload() {
+      reloads.push("reload");
+    },
+    status() {},
+  });
+  const master = [
+    "#EXTM3U",
+    '#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,CODECS="avc1.640028",FRAME-RATE=60.000',
+    "https://video.example/hd-variant.m3u8",
+  ].join("\n");
+  await guard(masterUrlForTests);
+  const body = await (await guard("https://video.example/hd-variant.m3u8")).text();
+  assert(body.includes("hd-live-1.ts") && body.includes("hd-live-2.ts"), "the 1080p backup segments are served");
+  assert(!body.includes("low-live.ts"), "the 160p rung is not what the 1080p player reads");
+  assert(!body.includes("hd-ad-"), "the commercial segments are not in the playlist");
+  assertEquals(body.split("\n").filter((line) => line.startsWith("https://")).length, 2, "both slots stay filled");
+  assertEquals(body.split("\n").filter((line) => line === "#EXT-X-DISCONTINUITY").length, 1, "the switch is one discontinuity");
+  await flushReload();
+  assertEquals(reloads, [], "matching the rung does not setSrc");
+});
+
 Deno.test("upcoming then inf at 1920x1080 never reloads and does not play the inf segments", async () => {
   const traces = [];
   const previous = globalThis.TwitchAdblockDebug;

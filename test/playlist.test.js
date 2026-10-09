@@ -60,6 +60,16 @@ Deno.test("inf ad segments are replaced without dropping the slot or repeating o
   const short = playlist.replaceAdSegments(main, ["https://video.example/backup-1.ts"]);
   assertEquals(short.ok, false);
   assertEquals(short.text.includes("ad-1.ts"), true);
+  const marked = playlist.replaceAdSegments(main, [
+    "https://video.example/backup-1.ts",
+    "https://video.example/backup-2.ts",
+  ], true);
+  assertEquals(marked.text.split("\n").filter((line) => line === "#EXT-X-DISCONTINUITY").length, 1);
+  const again = playlist.replaceAdSegments(main, [
+    "https://video.example/backup-1.ts",
+    "https://video.example/backup-2.ts",
+  ], false);
+  assertEquals(again.text.includes("#EXT-X-DISCONTINUITY"), false);
 });
 
 Deno.test("a live maf cue is a client-side ad and still not a backup break", () => {

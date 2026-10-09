@@ -483,10 +483,11 @@ function installTwitchAdblockPlaylist(target) {
   // segments stays the same, so the player buffer is not emptied and the player
   // is not reloaded. If there are not enough new live URLs, refuse rather than
   // repeat one segment or drop the slot.
-  function replaceAdSegments(mainText, backupUrls) {
+  function replaceAdSegments(mainText, backupUrls, markBreak) {
     const lines = linesOf(mainText);
     const windows = adWindows(lines);
     const times = segmentTimes(lines);
+    let marked = false;
     const present = new Set(lines.map((line) => line.trim()).filter((line) => line && !line.startsWith("#")));
     const fresh = [];
     const seen = new Set();
@@ -516,7 +517,12 @@ function installTwitchAdblockPlaylist(target) {
           }
           continue;
         }
-        if (out[out.length - 1] !== "#EXT-X-DISCONTINUITY") out.push("#EXT-X-DISCONTINUITY");
+        // One discontinuity for the whole switch. One per slot makes the player
+        // reset the decoder on every segment and stall.
+        if (markBreak && !marked) {
+          if (out[out.length - 1] !== "#EXT-X-DISCONTINUITY") out.push("#EXT-X-DISCONTINUITY");
+          marked = true;
+        }
         out.push(`#EXTINF:${duration},live`);
         out.push(fresh.shift());
         replaced += 1;
@@ -530,6 +536,21 @@ function installTwitchAdblockPlaylist(target) {
     const hasSegment = out.some((line) => line.trim() && !line.startsWith("#"));
     const ok = hasSegment && (need === 0 || replaced === need);
     return { text: ok ? text : lines.join("\n"), need, replaced, ok };
+  }
+
+  function markDiscontinuity(text) {
+    const lines = linesOf(text);
+    if (lines.some((line) => line.trim() === "#EXT-X-DISCONTINUITY")) return lines.join("\n");
+    const out = [];
+    let marked = false;
+    for (const line of lines) {
+      if (!marked && line.startsWith("#EXTINF")) {
+        out.push("#EXT-X-DISCONTINUITY");
+        marked = true;
+      }
+      out.push(line);
+    }
+    return out.join("\n");
   }
 
   function firstAdSegmentUrl(text) {
@@ -591,6 +612,7 @@ function installTwitchAdblockPlaylist(target) {
     stripAds,
     liveSegmentUrls,
     replaceAdSegments,
+    markDiscontinuity,
     firstAdSegmentUrl,
     blankSegmentBytes,
   });
