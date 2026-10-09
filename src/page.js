@@ -1129,6 +1129,7 @@ function createPlaylistGuard(env) {
     session.servedCleanUrl = "";
     session.backupMaster = "";
     session.backupHref = "";
+    session.cleanPool = [];
     session.spares = [];
     session.round = null;
     session.backupUrls.clear();
@@ -1496,6 +1497,19 @@ function createPlaylistGuard(env) {
     });
   }
 
+  function poolCleanSegments(session, urls) {
+    const next = [];
+    const seen = new Set();
+    for (const url of (urls || []).concat(session.cleanPool || [])) {
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      next.push(url);
+      if (next.length >= 24) break;
+    }
+    session.cleanPool = next;
+    return next;
+  }
+
   function segmentKey(want) {
     return want && want.resolution ? String(want.resolution) : "";
   }
@@ -1595,7 +1609,7 @@ function createPlaylistGuard(env) {
     const rung = session.variants.get(url) || null;
     trace("playback", "ad-seen " + reason + (rung && rung.resolution ? " " + rung.resolution : ""));
     if (reason === "upcoming") primeCleanSegments(session, channel, rung);
-    const urls = reason === "upcoming" ? [] : await readyCleanSegments(session, channel, rung);
+    const urls = reason === "upcoming" ? [] : poolCleanSegments(session, await readyCleanSegments(session, channel, rung));
     const spliced = playlist.replaceAdSegments(text, urls, !session.spliced);
     if (!spliced.ok) {
       trace("playlist", "inf-no-reload");
