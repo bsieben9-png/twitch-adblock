@@ -178,6 +178,10 @@ Deno.test("ad chrome is hidden and the video element is not", () => {
   const css = api.chromeCss();
   assert(css.includes('[data-testid="ad-click-overlay"]'), "click catcher");
   assert(css.includes('[aria-label="Ad progress"]'), "progress bar");
+  assert(css.includes("#consolidated_header"), "header banner slot");
+  assert(css.includes("#native_feed_ad"), "feed banner slot");
+  assert(css.includes('iframe[id^="google_ads_iframe"]'), "banner frame");
+  assert(css.includes('div:has(> video-player):has([data-testid="ima-ad-controls"])'), "post-roll cover");
   assert(!css.includes("video{"), "video stays visible");
   assert(!css.includes("video,"), "video is not in the hide list");
   for (const selector of api.AD_CHROME_SELECTORS) {
@@ -185,12 +189,43 @@ Deno.test("ad chrome is hidden and the video element is not", () => {
   }
 });
 
+function node(tag, children) {
+  const element = { tagName: tag, children: children || [], parentElement: null };
+  for (const child of element.children) child.parentElement = element;
+  return element;
+}
+
+Deno.test("the post-roll cover is separate from the live video", () => {
+  const live = node("VIDEO");
+  const slate = node("VIDEO");
+  const player = node("VIDEO-PLAYER", [slate]);
+  const controls = node("DIV");
+  const overlay = node("DIV", [player, controls]);
+  const shell = node("DIV", [live, overlay]);
+  assert(api.postRollOverlay(controls) === overlay, "cover is the post-roll box");
+  assert(api.postRollOverlay(controls) !== shell, "shell stays");
+  assertEquals(api.videosInside(overlay).map((item) => item.tagName), ["VIDEO"]);
+  assert(api.videosInside(overlay)[0] === slate, "slate clip");
+  assert(!api.videosInside(overlay).includes(live), "live video is outside the cover");
+});
+
+Deno.test("a banner frame collapses its box unless that box also holds video", () => {
+  const frame = node("IFRAME");
+  const slot = node("DIV", [frame]);
+  assert(api.bannerCollapseTarget(frame) === slot, "empty slot collapses");
+  const live = node("VIDEO");
+  const shell = node("DIV", [live, frame]);
+  assert(api.bannerCollapseTarget(frame) === frame, "a box with video keeps the frame only");
+  assert(shell.children.includes(live));
+});
+
 Deno.test("the kick script does not mute, rate-change, or phone home", () => {
   assert(source.includes("PlayerAdBreakStarted"), "ivs ad break");
   assert(source.includes("skipAd"), "player skip");
   assert(source.includes("targetPlayheadForAdSkip"), "stitched skip point");
   assert(source.includes("amazon-ivs-wasmworker"), "only the ivs worker is watched");
-  assert(!source.includes(".muted"), "do not mute");
+  assert(!source.includes('querySelectorAll("video")'), "do not grab every video");
+  assert(source.includes("videosInside(overlay)"), "only clips inside the post-roll cover are paused");
   assert(!source.includes("playbackRate"), "do not fast-forward");
   assert(!source.includes(".currentTime"), "do not seek the video element");
   assert(!source.includes("innerHTML"), "no html injection");

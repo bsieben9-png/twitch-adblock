@@ -1,7 +1,7 @@
 // Runs on Kick at document_start. In-player ads are skipped only when the
 // IVS player can jump back to the stream. If a skip would rewind a long way,
-// or the player cannot take it, the ad plays. The video element is never
-// hidden, muted, or sped up.
+// or the player cannot take it, the ad plays. The live video is never hidden,
+// muted, or sped up. A separate post-roll cover can be paused.
 function installKickAdblock(target) {
   const AD_BREAK_STARTED = "PlayerAdBreakStarted";
   const AD_BREAK_ENDED = "PlayerAdBreakEnded";
@@ -17,7 +17,14 @@ function installKickAdblock(target) {
     '[data-testid="ad-skip-countdown"]',
     '[aria-label="Ad progress"]',
     '[aria-label="Visit advertiser"]',
+    '[data-testid="ima-ad-controls"]',
   ];
+  const BANNER_SELECTORS = [
+    "#consolidated_header",
+    "#native_feed_ad",
+    'iframe[id^="google_ads_iframe"]',
+  ];
+  const POSTROLL_OVERLAY = 'div:has(> video-player):has([data-testid="ima-ad-controls"])';
 
   function onKickHost(host) {
     const value = String(host || "").toLowerCase();
@@ -165,8 +172,45 @@ function installKickAdblock(target) {
     return { state: next, command: { id: next.playerId, funcName: "seekTo", args: [choice.target] } };
   }
 
+  function directChild(element, tagName) {
+    const children = element && element.children;
+    if (!children) return false;
+    for (const child of children) {
+      if (String(child.tagName || "").toUpperCase() === tagName) return true;
+    }
+    return false;
+  }
+
+  function postRollOverlay(node) {
+    let current = node && node.parentElement;
+    while (current) {
+      if (String(current.tagName || "").toUpperCase() === "DIV" && directChild(current, "VIDEO-PLAYER")) return current;
+      current = current.parentElement;
+    }
+    return null;
+  }
+
+  function videosInside(element, found) {
+    const clips = found || [];
+    const children = element && element.children;
+    if (!children) return clips;
+    for (const child of children) {
+      if (String(child.tagName || "").toUpperCase() === "VIDEO") clips.push(child);
+      else videosInside(child, clips);
+    }
+    return clips;
+  }
+
+  function bannerCollapseTarget(frame) {
+    const parent = frame && frame.parentElement;
+    if (!parent) return frame || null;
+    if (videosInside(parent).length) return frame;
+    return parent;
+  }
+
   function chromeCss() {
-    return `${AD_CHROME_SELECTORS.join(",")}{display:none!important;pointer-events:none!important;}`;
+    const hide = [...AD_CHROME_SELECTORS, ...BANNER_SELECTORS, POSTROLL_OVERLAY];
+    return `${hide.join(",")}{display:none!important;pointer-events:none!important;}`;
   }
 
   target.onKickHost = onKickHost;
@@ -179,10 +223,78 @@ function installKickAdblock(target) {
   target.reduceSessionDetail = reduceSessionDetail;
   target.chromeCss = chromeCss;
   target.AD_CHROME_SELECTORS = AD_CHROME_SELECTORS;
+  target.BANNER_SELECTORS = BANNER_SELECTORS;
+  target.postRollOverlay = postRollOverlay;
+  target.videosInside = videosInside;
+  target.bannerCollapseTarget = bannerCollapseTarget;
   target.AD_BREAK_STARTED = AD_BREAK_STARTED;
   target.SKIP_LIMIT = SKIP_LIMIT;
   target.SKIP_WINDOW_MS = SKIP_WINDOW_MS;
   target.HOLD_MS = HOLD_MS;
+
+  function quietClip(video) {
+    try {
+      video.muted = true;
+      if (typeof video.pause === "function" && !video.paused) video.pause();
+    } catch (error) {
+      console.log("twitch-adblock kick failed open", error);
+    }
+  }
+
+  function settleCovers(root) {
+    if (!root || typeof root.querySelectorAll !== "function") return;
+    let controls;
+    let frames;
+    try {
+      controls = root.querySelectorAll('[data-testid="ima-ad-controls"]');
+      frames = root.querySelectorAll('iframe[id^="google_ads_iframe"]');
+    } catch (error) {
+      console.log("twitch-adblock kick failed open", error);
+      return;
+    }
+    for (const node of controls) {
+      const overlay = postRollOverlay(node);
+      if (!overlay || !overlay.style) continue;
+      overlay.style.setProperty("display", "none", "important");
+      for (const video of videosInside(overlay)) quietClip(video);
+    }
+    for (const frame of frames) {
+      const targetNode = bannerCollapseTarget(frame);
+      if (targetNode && targetNode.style) targetNode.style.setProperty("display", "none", "important");
+    }
+  }
+
+  function watchCovers() {
+    settleCovers(document);
+    const root = document.documentElement;
+    if (!root || typeof MutationObserver !== "function") return;
+    let scheduled = false;
+    const observer = new MutationObserver((mutations) => {
+      if (scheduled || !coverMutation(mutations)) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        settleCovers(document);
+      });
+    });
+    observer.observe(root, { childList: true, subtree: true });
+  }
+
+  function coverMutation(mutations) {
+    for (const mutation of mutations) {
+      const nodes = mutation.addedNodes;
+      if (!nodes) continue;
+      for (const node of nodes) {
+        if (!node || node.nodeType !== 1) continue;
+        const tag = String(node.tagName || "");
+        if (tag === "IFRAME" || tag === "VIDEO" || tag === "VIDEO-PLAYER") return true;
+        if (typeof node.querySelector === "function" && node.querySelector('[data-testid="ima-ad-controls"], iframe[id^="google_ads_iframe"], video-player')) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
 
   function injectChromeCss() {
     try {
@@ -335,6 +447,7 @@ function installKickAdblock(target) {
       postCommand(ivsWorker, bridge.onSessionDetail(detail));
     });
     injectChromeCss();
+    watchCovers();
     console.log("twitch-adblock: watching Kick");
   }
 

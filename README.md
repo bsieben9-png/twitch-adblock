@@ -8,7 +8,7 @@ A Chrome extension that blocks ads on Twitch live streams and YouTube. It is fre
 
 - **Twitch live:** when a midroll starts, it switches to an ad-free backup of the same stream and switches back when the break ends. If no clean backup is available, it lets the ad play instead of freezing your video.
 - **YouTube:** removes player ads and the Sponsored cards on the home page.
-- **Kick:** skips an in-player ad when the player can jump back to the stream. If it cannot, the ad plays. The stream stays unmuted.
+- **Kick:** skips an in-player ad when the player can jump back to the stream. If it cannot, the ad plays. The stream stays unmuted. The post-roll cover and the header and feed banners are hidden.
 - Twitch VODs and clips pass through untouched.
 
 ## Current version: v0.1.21 (beta)
