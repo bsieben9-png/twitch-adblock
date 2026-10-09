@@ -16,11 +16,11 @@ A Chrome extension that blocks ads on Twitch live streams and YouTube. It is fre
 - **YouTube:** removes player ads and the Sponsored cards on the home page.
 - VODs and clips pass through untouched.
 
-## Current beta: v0.1.24
+## Current version: v0.1.24
 
 <img src="docs/whats-new.png" width="800" alt="What's new: midrolls stay on the same encode with no player reload; blank cover hides only-video ads; corner live still covers the commercial; YouTube blocking label clears after skip">
 
-Try this build if you want the no-reload midroll path. A dark blank cover hides the ad picture when Twitch does not mount a corner. The safe stable build remains [v0.1.22](https://github.com/gecko-of-shadow/twitch-adblock/releases/tag/v0.1.22).
+This is the current build. Midrolls stay on the same encode with no player reload. A dark blank cover hides the ad picture when Twitch does not mount a corner; when a corner live picture exists, that corner covers the commercial instead.
 
 A small debug popup is **on by default for now (temporary)**. It keeps a short log in memory on your device, hides login tokens, and sends nothing out. Open the extension popup to turn it off or to copy the log if you need to report a problem.
 

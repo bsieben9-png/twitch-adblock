@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.24 — beta
+## 0.1.24
 
 - Same no-reload midroll path as 0.1.23: the player stays on the encode it is already decoding.
 - When Twitch never mounts a corner (only-video commercial), the commercial video is hidden and covered with a blank sheet, ad chrome is hidden, and audio is muted without pausing. Corner cover is unchanged.
