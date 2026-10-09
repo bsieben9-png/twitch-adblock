@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "twitch-adblock",
   "version": "0.1.11",
-  "description": "Blocks video ads on Twitch and YouTube.",
+  "description": "Blocks video ads on Twitch, YouTube, and Kick.",
   "action": {
     "default_title": "twitch-adblock",
     "default_icon": {
@@ -30,6 +30,13 @@
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": false
+    },
+    {
+      "matches": ["*://kick.com/*", "*://*.kick.com/*"],
+      "js": ["src/kick.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
     }
   ]
 }

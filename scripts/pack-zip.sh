@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$ROOT/manifest.json")"
 OUT="${1:-$ROOT/twitch-adblock-${VERSION}.zip}"
 
-REQUIRED=(manifest.json src/page.js src/playlist.js src/youtube.js icons/icon16.png icons/icon48.png icons/icon128.png)
+REQUIRED=(manifest.json src/page.js src/playlist.js src/youtube.js src/kick.js icons/icon16.png icons/icon48.png icons/icon128.png)
 for r in "${REQUIRED[@]}"; do
   [[ -f "$ROOT/$r" ]] || { echo "Missing $r"; exit 1; }
 done
@@ -18,7 +18,7 @@ fi
 TMP="$(mktemp -d /tmp/adblock-pack.XXXXXX)"
 mkdir -p "$TMP/src" "$TMP/icons"
 cp "$ROOT/manifest.json" "$TMP/"
-cp "$ROOT/src/page.js" "$ROOT/src/playlist.js" "$ROOT/src/youtube.js" "$TMP/src/"
+cp "$ROOT/src/page.js" "$ROOT/src/playlist.js" "$ROOT/src/youtube.js" "$ROOT/src/kick.js" "$TMP/src/"
 cp "$ROOT/icons/icon16.png" "$ROOT/icons/icon48.png" "$ROOT/icons/icon128.png" "$TMP/icons/"
 
 rm -f "$OUT"
