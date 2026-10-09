@@ -76,7 +76,8 @@ Deno.test("a clean live master keeps the channel session so a later midroll stil
   const masterUrl = "https://usher.ttvnw.net/api/v2/channel/hls/Some_Channel.m3u8?token=live&sig=live";
   await guard(masterUrl);
   const swapped = await (await guard("https://video.example/live-variant.m3u8")).text();
-  assert(swapped.includes("https://video.example/live.ts"), "the ad variant is swapped while the session exists");
+  assert(swapped.includes("https://ads.example/ad.ts"), "the ad variant stays on its own segments");
+  assert(!swapped.includes("https://video.example/live.ts"), "another encode is not spliced in");
 
   mainClean = true;
   const realNow = Date.now;
@@ -87,8 +88,8 @@ Deno.test("a clean live master keeps the channel session so a later midroll stil
     mainClean = false;
     // A midroll that starts after a clean page load must not need a manual reload.
     const after = await (await guard("https://video.example/live-variant.m3u8")).text();
-    assert(!after.includes("https://ads.example/ad.ts"), "the later midroll is not passed through");
-    assert(after.includes("https://video.example/live.ts"), "the later midroll is answered with the backup");
+    assert(after.includes("https://ads.example/ad.ts"), "the later midroll stays on its own segments");
+    assert(!after.includes("https://video.example/live.ts"), "the later midroll is not moved to another encode");
   } finally {
     Date.now = realNow;
   }
@@ -123,7 +124,8 @@ Deno.test("old variant urls are evicted and the current one still swaps", async 
   }
   const current = await (await guard("https://video.example/variant-79.m3u8")).text();
   const stale = await (await guard("https://video.example/variant-0.m3u8")).text();
-  assert(current.includes("https://video.example/live.ts"), "the newest variant still swaps");
+  assert(current.includes("https://ads.example/ad.ts"), "the newest variant stays on its own segments");
+  assert(!current.includes("https://video.example/live.ts"), "the newest variant is not moved to another encode");
   assert(stale.includes("https://ads.example/ad.ts"), "an evicted variant is no longer swapped");
   assert(!stale.includes("https://video.example/live.ts"), "an evicted variant is not answered from the backup");
 });
@@ -158,7 +160,8 @@ Deno.test("only the recent channel sessions are kept during ad breaks", async ()
   }
   const newest = await (await guard("https://video.example/chan19-main.m3u8")).text();
   const oldest = await (await guard("https://video.example/chan00-main.m3u8")).text();
-  assert(newest.includes("https://video.example/live.ts"), "a recent channel still swaps");
+  assert(newest.includes("https://ads.example/ad.ts"), "a recent channel stays on its own segments");
+  assert(!newest.includes("https://video.example/live.ts"), "a recent channel is not moved to another encode");
   assert(oldest.includes("https://ads.example/ad.ts"), "a channel past the session cap is dropped");
   assert(!oldest.includes("https://video.example/live.ts"), "a dropped channel is not answered from its backup");
 });

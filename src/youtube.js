@@ -246,6 +246,29 @@ function installYoutubeAdblock(target) {
     }
   }
 
+  // One clear per video. Later ad checks must not push this later, or the
+  // label stays up for the whole watch.
+  const labelClearMs = 1000;
+
+  function planLabel(state, event) {
+    const now = Number(event && event.now) || 0;
+    const current = state && typeof state === "object"
+      ? { show: Boolean(state.show), clearAt: Number(state.clearAt) || 0, done: Boolean(state.done) }
+      : { show: false, clearAt: 0, done: false };
+    if (!event || event.type === "navigate") return { show: false, clearAt: 0, done: false };
+    if (event.type === "clear") return { show: false, clearAt: 0, done: current.show || current.done };
+    if (event.type === "tick") {
+      if (current.show && current.clearAt && now >= current.clearAt) return { show: false, clearAt: 0, done: true };
+      return current;
+    }
+    if (event.type === "block") {
+      if (current.done) return { show: false, clearAt: 0, done: true };
+      if (current.show && current.clearAt) return { show: true, clearAt: current.clearAt, done: false };
+      return { show: true, clearAt: now + labelClearMs, done: false };
+    }
+    return current;
+  }
+
   function applyNoAdPlayback(body) {
     if (typeof body !== "string" || !body.includes("contentPlaybackContext")) return { body, changed: false };
     let parsed;
@@ -279,6 +302,8 @@ function installYoutubeAdblock(target) {
     stripValue,
     stripResponseText,
     applyNoAdPlayback,
+    planLabel,
+    labelClearMs,
   });
 }
 
@@ -320,7 +345,7 @@ function startYoutubeAdblock() {
         type: "state",
         on: debug.on === true,
         text: debug.dump(),
-        version: debug.version || "0.1.22",
+        version: debug.version || "0.1.24",
         gen: data.gen,
       }, "*");
     } catch {
@@ -336,6 +361,7 @@ function startYoutubeAdblock() {
   const nativeParse = JSON.parse;
   let hideTimer = 0;
   let noticeGeneration = 0;
+  let labelState = { show: false, clearAt: 0, done: false };
   const retryTimers = new Set();
 
   function requestUrl(input) {
@@ -373,17 +399,23 @@ function startYoutubeAdblock() {
     retryTimers.clear();
   }
 
-  function notify(blocking, attempt, generation) {
-    if (blocking && !attempt) trace("youtube", "blocked");
+  function removeNotice() {
     const existing = document.getElementById("twitch-adblock-notice");
+    if (existing) existing.remove();
+  }
+
+  function notify(blocking, attempt, generation) {
     if (!blocking) {
       noticeGeneration += 1;
+      labelState = api.planLabel(labelState, { type: "clear", now: Date.now() });
       clearNoticeTimers();
-      if (existing) existing.remove();
+      removeNotice();
       return;
     }
+    if (labelState.done) return;
     const gen = generation == null ? noticeGeneration : generation;
     if (gen !== noticeGeneration) return;
+    if (!attempt && !labelState.show) trace("youtube", "blocked");
     const player = playerRoot();
     if (!player) {
       const next = (attempt || 0) + 1;
@@ -396,15 +428,32 @@ function startYoutubeAdblock() {
       }
       return;
     }
-    const notice = existing || document.createElement("div");
+    const now = Date.now();
+    const next = api.planLabel(labelState, { type: "block", now });
+    const started = !labelState.show;
+    labelState = next;
+    if (!next.show) {
+      clearNoticeTimers();
+      removeNotice();
+      return;
+    }
+    const notice = document.getElementById("twitch-adblock-notice") || document.createElement("div");
     notice.id = "twitch-adblock-notice";
     notice.textContent = "Blocking ads";
     notice.style.cssText = "position:absolute;top:8px;left:8px;z-index:60;color:#fff;background:rgba(0,0,0,.75);padding:4px 8px;font:12px/1.2 sans-serif;pointer-events:none;";
     if (notice.parentElement !== player) player.appendChild(notice);
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => {
-      if (gen === noticeGeneration) notify(false);
-    }, 8000);
+    if (started || !hideTimer) {
+      clearTimeout(hideTimer);
+      const wait = Math.max(0, next.clearAt - now);
+      hideTimer = setTimeout(() => {
+        hideTimer = 0;
+        if (gen !== noticeGeneration) return;
+        noticeGeneration += 1;
+        labelState = api.planLabel(labelState, { type: "tick", now: Date.now() });
+        clearNoticeTimers();
+        removeNotice();
+      }, wait);
+    }
   }
 
   function removeDomAds() {
@@ -643,7 +692,12 @@ function startYoutubeAdblock() {
   }
 
   injectHomeFeedCss();
-  document.addEventListener("yt-navigate-start", () => notify(false), true);
+  document.addEventListener("yt-navigate-start", () => {
+    noticeGeneration += 1;
+    labelState = api.planLabel(labelState, { type: "navigate", now: Date.now() });
+    clearNoticeTimers();
+    removeNotice();
+  }, true);
   document.addEventListener("yt-navigate-finish", () => {
     injectHomeFeedCss();
     removeDomAds();

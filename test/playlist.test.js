@@ -33,6 +33,45 @@ Deno.test("channel names come from live usher paths", () => {
   assertEquals(playlist.channelFromPlaylistUrl("https://usher.ttvnw.net/vod/v2/123.m3u8"), null);
 });
 
+Deno.test("inf ad segments are replaced without dropping the slot or repeating one url", () => {
+  const main = [
+    "#EXTM3U",
+    "#EXT-X-MEDIA-SEQUENCE:10",
+    "#EXTINF:2.000,live",
+    "https://video.example/live-a.ts",
+    "#EXTINF:2.000,",
+    "https://video.example/ad-1.ts",
+    "#EXTINF:2.000,",
+    "https://video.example/ad-2.ts",
+  ].join("\n");
+  const replaced = playlist.replaceAdSegments(main, [
+    "https://video.example/live-a.ts",
+    "https://video.example/backup-1.ts",
+    "https://video.example/backup-2.ts",
+  ]);
+  assertEquals(replaced.ok, true);
+  assertEquals(replaced.replaced, 2);
+  assertEquals(replaced.text.includes("https://video.example/live-a.ts"), true);
+  assertEquals(replaced.text.includes("https://video.example/backup-1.ts"), true);
+  assertEquals(replaced.text.includes("https://video.example/backup-2.ts"), true);
+  assertEquals(replaced.text.includes("ad-1.ts"), false);
+  assertEquals(replaced.text.includes("ad-2.ts"), false);
+  assertEquals(replaced.text.split("\n").filter((line) => line.startsWith("https://")).length, 3);
+  const short = playlist.replaceAdSegments(main, ["https://video.example/backup-1.ts"]);
+  assertEquals(short.ok, false);
+  assertEquals(short.text.includes("ad-1.ts"), true);
+  const marked = playlist.replaceAdSegments(main, [
+    "https://video.example/backup-1.ts",
+    "https://video.example/backup-2.ts",
+  ], true);
+  assertEquals(marked.text.split("\n").filter((line) => line === "#EXT-X-DISCONTINUITY").length, 1);
+  const again = playlist.replaceAdSegments(main, [
+    "https://video.example/backup-1.ts",
+    "https://video.example/backup-2.ts",
+  ], false);
+  assertEquals(again.text.includes("#EXT-X-DISCONTINUITY"), false);
+});
+
 Deno.test("a live maf cue is a client-side ad and still not a backup break", () => {
   const cue = '#EXTM3U\n#EXTINF:2.000,live\nhttps://video.example/live.ts\n#EXT-X-DATERANGE:ID="maf-1",CLASS="twitch-maf-ad",START-DATE="2026-10-08T07:14:27.761Z",PLANNED-DURATION=30.000\n';
   assertEquals(playlist.isClientAdCue(cue), true);

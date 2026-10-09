@@ -144,8 +144,8 @@ Deno.test("a 404 on the first rung does not hide ads on the next rung", async ()
 
   const master = await guard("https://usher.ttvnw.net/api/v2/channel/hls/Some_Channel.m3u8?token=live&sig=live");
   const masterText = await master.text();
-  assert(masterText.includes("pip-variant.m3u8"), "ads on a later rung still select a clean backup");
-  assert(tokens.includes("picture-by-picture"), "the search continues after the first rung 404");
+  assert(masterText.includes("ad-variant.m3u8"), "the player keeps its own ladder");
+  assert(!masterText.includes("pip-variant.m3u8"), "a 404 does not move the player onto another encode");
 });
 
 Deno.test("clip and non-live media playlists pass through unchanged", async () => {
@@ -212,7 +212,7 @@ Deno.test("a second master waits for the backup already in flight", async () => 
   await new Promise((resolve) => setTimeout(resolve, 20));
   releaseFirst();
   const [left, right] = await Promise.all([first, second]);
-  assert((await left.text()).includes("autoplay-variant.m3u8"), "the first master uses the clean backup");
-  assert((await right.text()).includes("autoplay-variant.m3u8"), "the overlapping master uses the same backup");
-  assertEquals([...tokens].sort(), ["autoplay", "embed", "picture-by-picture"], "one parallel backup search serves both masters");
+  assert((await left.text()).includes("live-variant.m3u8"), "the first master stays on the player's ladder");
+  assert((await right.text()).includes("live-variant.m3u8"), "the overlapping master stays on that ladder");
+  assertEquals(tokens, [], "an ad ladder is not replaced by another encode");
 });

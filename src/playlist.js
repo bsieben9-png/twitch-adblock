@@ -458,6 +458,101 @@ function installTwitchAdblockPlaylist(target) {
     return packet;
   }
 
+  function liveSegmentUrls(text, base) {
+    const lines = linesOf(text);
+    const urls = [];
+    for (let i = 0; i < lines.length - 1; i++) {
+      const line = lines[i];
+      if (!line.startsWith("#EXTINF") || !line.includes(",live") || line.includes("Amazon")) continue;
+      const next = (lines[i + 1] || "").trim();
+      if (!next || next.startsWith("#")) continue;
+      let absolute = next;
+      if (base) {
+        try {
+          absolute = new URL(next, base).href;
+        } catch {
+          absolute = next;
+        }
+      }
+      urls.push(absolute);
+    }
+    return urls;
+  }
+
+  // Swap ad segment URLs for different live segments. The line count of real
+  // segments stays the same, so the player buffer is not emptied and the player
+  // is not reloaded. If there are not enough new live URLs, refuse rather than
+  // repeat one segment or drop the slot.
+  function replaceAdSegments(mainText, backupUrls, markBreak) {
+    const lines = linesOf(mainText);
+    const windows = adWindows(lines);
+    const times = segmentTimes(lines);
+    let marked = false;
+    const present = new Set(lines.map((line) => line.trim()).filter((line) => line && !line.startsWith("#")));
+    const fresh = [];
+    const seen = new Set();
+    for (const url of backupUrls || []) {
+      const value = String(url || "").trim();
+      if (!value || present.has(value) || seen.has(value)) continue;
+      seen.add(value);
+      fresh.push(value);
+    }
+    let need = 0;
+    let replaced = 0;
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.startsWith("#EXT-X-TWITCH-PREFETCH:")) continue;
+      if (line.startsWith("#EXT-X-CUE-OUT") || line.startsWith("#EXT-X-CUE-IN")) continue;
+      if (line.startsWith("#EXT-X-DATERANGE:") && (line.includes("twitch-stitched") || line.includes("stitched-ad"))) continue;
+      if (line.startsWith("#EXTINF") && isAdSegmentLine(lines, i, windows, times)) {
+        need += 1;
+        const duration = line.slice("#EXTINF:".length).split(",")[0];
+        if (!fresh.length) {
+          out.push(line);
+          const next = lines[i + 1];
+          if (next && !next.startsWith("#")) {
+            out.push(next);
+            i += 1;
+          }
+          continue;
+        }
+        // One discontinuity for the whole switch. One per slot makes the player
+        // reset the decoder on every segment and stall.
+        if (markBreak && !marked) {
+          if (out[out.length - 1] !== "#EXT-X-DISCONTINUITY") out.push("#EXT-X-DISCONTINUITY");
+          marked = true;
+        }
+        out.push(`#EXTINF:${duration},live`);
+        out.push(fresh.shift());
+        replaced += 1;
+        const next = lines[i + 1];
+        if (next && !next.startsWith("#")) i += 1;
+        continue;
+      }
+      out.push(line);
+    }
+    const text = out.join("\n");
+    const hasSegment = out.some((line) => line.trim() && !line.startsWith("#"));
+    const ok = hasSegment && (need === 0 || replaced === need);
+    return { text: ok ? text : lines.join("\n"), need, replaced, ok };
+  }
+
+  function markDiscontinuity(text) {
+    const lines = linesOf(text);
+    if (lines.some((line) => line.trim() === "#EXT-X-DISCONTINUITY")) return lines.join("\n");
+    const out = [];
+    let marked = false;
+    for (const line of lines) {
+      if (!marked && line.startsWith("#EXTINF")) {
+        out.push("#EXT-X-DISCONTINUITY");
+        marked = true;
+      }
+      out.push(line);
+    }
+    return out.join("\n");
+  }
+
   function firstAdSegmentUrl(text) {
     const lines = linesOf(text);
     for (let i = 0; i < lines.length - 1; i++) {
@@ -515,6 +610,9 @@ function installTwitchAdblockPlaylist(target) {
     mapVariantsToBackup,
     createStripLedger,
     stripAds,
+    liveSegmentUrls,
+    replaceAdSegments,
+    markDiscontinuity,
     firstAdSegmentUrl,
     blankSegmentBytes,
   });

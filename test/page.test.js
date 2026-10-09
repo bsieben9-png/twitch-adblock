@@ -137,6 +137,24 @@ Deno.test("visibilitychange does not block Twitch chat reconnect listeners", () 
   const block = source.slice(start, start + 350);
   assert(!block.includes("stopImmediatePropagation"), "do not swallow other visibilitychange listeners after player reload");
   assert(block.includes("video.play()"), "still resume a paused video when the tab changes");
+  assert(block.includes("heldQuiet.has(video)"), "a covered commercial is not resumed when the tab changes");
+  assert(source.includes("function quietCoveredMedia"), "covered commercial media is muted and paused");
+  assert(!source.slice(source.indexOf("function quietCoveredMedia"), source.indexOf("function skipLiveClientAd")).includes("setSrc"), "quieting a commercial does not reload the player");
+});
+
+Deno.test("applyCover blanks only-video commercials without pause or setSrc", () => {
+  const start = source.indexOf("function applyCover");
+  const end = source.indexOf("// Stream display ads cover or squeeze", start);
+  const block = source.slice(start, end);
+  assert(block.includes('plan.action === "wait"'), "wait is the only-video commercial path");
+  assert(block.includes("holdQuiet(video, { pause: false })"), "the only video is muted without pause");
+  assert(block.includes("plan.mute"), "wait plans list videos to mute");
+  assert(block.includes("placeBlankSheet"), "only-video cover places a blank sheet over the ad");
+  assert(block.includes('visibility:hidden'), "the commercial video is hidden under the blank");
+  assert(block.includes('trace("cover", "blank")'), "only-video blank is traced once");
+  assert(block.includes("coverApplying"), "blank sheet mutations do not re-enter applyCover");
+  assert(!/\bsetSrc\b/.test(block), "only-video blank does not reload the player");
+  assert(source.includes("AbortError"), "aborted fetches are not traced as fail-open ladder failures");
 });
 
 Deno.test("only player-looking workers get the playlist prelude", () => {
@@ -203,7 +221,7 @@ Deno.test("return-to-main refreshes a rotated live ladder and fails open", () =>
 Deno.test("leaveBackup uses video-swap-new moving-off guard", () => {
   assert(source.includes("movingOffBackup"), "session tracks IsMovingOffBackupEncodings");
   assert(/if \(handoff\) \{\s*session\.movingOffBackup = true;\s*session\.movingOffAt = Date\.now\(\);/.test(source), "leave sets the guard before reload");
-  assert(source.includes("const handoff = wasUsing && !servingMain;"), "a master that already serves main needs no guard");
+  assert(source.includes("const handoff = wasUsing && !servingMain && enteredByReload;"), "setSrc only after a reload entered the backup");
   assert(source.includes("const movingOffMs = 10000"), "a guard the master never clears still expires");
   assert(source.includes("movingOffBackup = false"), "master poll clears the guard");
   assert(source.includes('const backupTypes = ["autoplay", "picture-by-picture", "embed"]'), "backup try order matches video-swap-new");
@@ -280,6 +298,109 @@ Deno.test("a live client-side ad player is hidden and a vod ad player is left al
   const blocked = api.skipLiveClientAd(doc(node("page", [wrapping])), { pathname: "/somechannel", hostname: "www.twitch.tv", search: "" });
   assertEquals(blocked.action, "fail-open");
   assertEquals(blocked.roots.length, 0);
+});
+
+Deno.test("a corner live video covers the commercial and the only video is muted without pause", () => {
+  const start = source.indexOf("function isVodOrClipLocation");
+  const end = source.indexOf("function startTwitchAdblockWorker", start);
+  const api = new Function(`${source.slice(start, end)}\nreturn { coverLiveOverAd, quietCoveredMedia };`)();
+  function node(tag, opts) {
+    const el = {
+      tag,
+      className: (opts && opts.className) || "",
+      target: (opts && opts.target) || "",
+      children: (opts && opts.children) || [],
+      parentElement: null,
+      style: { cssText: "", position: "" },
+      muted: false,
+      videoWidth: opts && opts.videoWidth,
+      readyState: opts && opts.readyState,
+      width: (opts && opts.width) || 0,
+      height: (opts && opts.height) || 0,
+      getAttribute(name) {
+        return name === "data-a-target" ? el.target : "";
+      },
+      getBoundingClientRect() {
+        return { width: el.width, height: el.height };
+      },
+      contains(other) {
+        if (other === el) return true;
+        return el.children.some((child) => child.contains(other));
+      },
+      querySelectorAll(selector) {
+        const all = [];
+        (function walk(item) {
+          all.push(item);
+          for (const child of item.children) walk(child);
+        })(el);
+        if (selector === "video") return all.filter((item) => item.tag === "video");
+        if (selector === "audio") return all.filter((item) => item.tag === "audio");
+        if (selector.includes("video-ad-countdown")) return all.filter((item) => item.target === "video-ad-countdown");
+        return [];
+      },
+    };
+    for (const child of el.children) child.parentElement = el;
+    return el;
+  }
+  const main = node("video", { width: 800, height: 450, videoWidth: 1920, readyState: 4 });
+  const corner = node("video", { width: 160, height: 90, videoWidth: 1920, readyState: 4 });
+  const cornerAudio = node("audio", {});
+  const cornerBox = node("div", { className: "pbyp-player", children: [corner, cornerAudio] });
+  const adAudio = node("audio", { className: "commercial-audio" });
+  const banner = node("div", { target: "video-ad-countdown" });
+  const player = node("div", { className: "video-player", children: [main, cornerBox, banner, adAudio] });
+  const doc = {
+    querySelector(selector) {
+      if (selector === ".video-player" || selector.includes("video-player")) return player;
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+  const covered = api.coverLiveOverAd(doc);
+  assertEquals(covered.action, "covered");
+  if (covered.live !== corner) throw new Error("the corner video is the picture that stays");
+  if (covered.hidden.length !== 1 || covered.hidden[0] !== main) throw new Error("the commercial video is hidden");
+  if (covered.banners.length !== 1 || covered.banners[0] !== banner) throw new Error("the countdown is hidden");
+  if (!covered.audios.includes(adAudio)) throw new Error("a separate ad audio element is muted");
+  if (covered.audios.includes(cornerAudio) || covered.audios.includes(corner)) throw new Error("the corner live audio stays on");
+  const commercial = { muted: false, paused: false, volume: 0.8, pause() { this.paused = true; } };
+  const prior = api.quietCoveredMedia(commercial);
+  assertEquals(commercial.muted, true);
+  assertEquals(commercial.paused, true);
+  assertEquals(commercial.volume, 0);
+  assertEquals(prior.muted, false);
+  assertEquals(prior.paused, false);
+  api.quietCoveredMedia(commercial);
+  assertEquals(commercial.paused, true);
+
+  const only = node("video", { width: 800, height: 450, videoWidth: 1920, readyState: 4 });
+  const onlyAdAudio = node("audio", { className: "commercial-audio" });
+  const onlyBanner = node("div", { target: "video-ad-countdown" });
+  const alone = node("div", { className: "video-player", children: [only, onlyAdAudio, onlyBanner] });
+  const waiting = api.coverLiveOverAd({
+    querySelector() {
+      return alone;
+    },
+    querySelectorAll(selector) {
+      if (selector === "audio") return [onlyAdAudio];
+      return [];
+    },
+  });
+  assertEquals(waiting.action, "wait");
+  assertEquals(waiting.hidden.length, 0);
+  assertEquals(waiting.mute.length, 1);
+  if (waiting.mute[0] !== only) throw new Error("the only commercial video is listed for mute");
+  if (!waiting.audios.includes(onlyAdAudio)) throw new Error("a separate ad audio element is muted on wait");
+  if (waiting.banners.length !== 1 || waiting.banners[0] !== onlyBanner) throw new Error("only-video wait still hides Twitch ad chrome");
+
+  const solo = { muted: false, paused: false, volume: 0.9, pause() { this.paused = true; } };
+  const mutePrior = api.quietCoveredMedia(solo, { pause: false });
+  assertEquals(solo.muted, true);
+  assertEquals(solo.volume, 0);
+  assertEquals(solo.paused, false);
+  assertEquals(mutePrior.paused, false);
 });
 
 Deno.test("the streak row is one stylesheet rule that cannot hide the player", () => {
