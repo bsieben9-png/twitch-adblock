@@ -1,8 +1,15 @@
 # Changelog
 
+## 0.2.4 — beta
+
+- Kick live: skips an in-player ad when the player can jump back to the stream. If it cannot, the ad plays. The stream stays unmuted. The post-roll cover and the header and feed banners are hidden.
+- YouTube Shorts: hides ad slots, badges, buttons, and companion ads inside the Shorts player. The Shorts player itself is not blanked.
+- Copy debug does nothing on Kick tabs.
+- Twitch live still uses upstream video-swap-new. This beta does not replace the stable download.
+
 ## 0.2.3
 
-- On a Twitch tab, ON answers the popup. Copy debug includes the log from that tab, including the on-screen blocking label when it is showing.
+- On a Twitch tab, the popup answers correctly when the extension is on. Copy debug includes the log from that tab, including the on-screen blocking label when it is showing.
 - Debug stays off until you turn it on. Opening the popup does not turn it on.
 - Twitch live still uses upstream video-swap-new. YouTube ad stripping stays.
 

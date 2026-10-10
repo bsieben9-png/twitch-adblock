@@ -205,7 +205,7 @@ Deno.test("the youtube script does not swap media or phone home", () => {
   assert(source.includes("isInlinePlaybackNoAd"), "player requests opt out of scheduled ads");
   assert(source.includes('notice.textContent = "Blocking ads"'), "the player label says ads are being blocked");
   assertEquals(manifest.name, "twitch-adblock");
-  assertEquals(manifest.version, "0.2.3");
+  assertEquals(manifest.version, "0.2.4");
   assertEquals(manifest.action.default_popup, "src/popup.html");
   assertEquals(manifest.permissions, undefined);
   assertEquals(manifest.host_permissions, undefined);
@@ -320,4 +320,14 @@ Deno.test("browse kind is recognized and home CSS targets Sponsored cards", () =
   assert(source.includes("injectHomeFeedCss"), "home CSS is injected");
   assert(source.includes('kind === "browse"'), "browse stripping is enabled");
   assert(!api.HOME_FEED_AD_CSS.includes("ytd-rich-item-renderer:has(ytd-rich-grid-media)"), "normal home videos are not hidden");
+  assert(!api.HOME_FEED_AD_CSS.includes("#shorts-player"), "do not blank the Shorts player");
+  assert(api.HOME_FEED_AD_CSS.includes("ytd-shorts ytd-ad-slot-renderer"), "shorts ad slot");
+  assert(api.HOME_FEED_AD_CSS.includes("ytd-shorts ytd-in-feed-ad-layout-renderer"), "shorts in-feed ad");
+  assert(api.HOME_FEED_AD_CSS.includes("ytd-shorts reels-ad-metadata-view-model"), "shorts reels metadata");
+  assert(api.HOME_FEED_AD_CSS.includes("ytd-shorts yt-ad-metadata-shape"), "shorts ad metadata shape");
+  assert(api.HOME_FEED_AD_CSS.includes("ytd-shorts ad-badge-view-model"), "shorts ad badge");
+  assert(api.HOME_FEED_AD_CSS.includes("ytd-shorts ad-button-view-model"), "shorts ad button");
+  assert(api.HOME_FEED_AD_CSS.includes("ytd-shorts ytd-companion-slot-renderer"), "shorts companion slot");
+  assert(api.HOME_FEED_AD_CSS.includes("ytd-shorts ytd-action-companion-ad-renderer"), "shorts action companion");
+  assert(api.HOME_FEED_AD_CSS.includes('ytd-shorts [class*="ytwReelsAdMetadataViewModelHost"]'), "shorts reels ad host");
 });
