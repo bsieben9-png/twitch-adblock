@@ -33,7 +33,8 @@ fi
 # Optional cosmetic files (Phase 0 depth: hide leftover boxes). Packed when present.
 OPTIONAL=()
 [[ -f "$ROOT/src/cosmetic.js" ]] && OPTIONAL+=("src/cosmetic.js")
-[[ -f "$ROOT/src/cosmetic.css" ]] && OPTIONAL+=("src/cosmetic.css")
+[[ -f "$ROOT/src/cosmetic-hide.css" ]] && OPTIONAL+=("src/cosmetic-hide.css")
+[[ -f "$ROOT/src/LICENSE-EasyList.txt" ]] && OPTIONAL+=("src/LICENSE-EasyList.txt")
 
 TMP="$(mktemp -d /tmp/adblock-pack.XXXXXX)"
 mkdir -p "$TMP/src/vendor" "$TMP/src/rules" "$TMP/icons"
@@ -42,6 +43,7 @@ cp "$ROOT/src/popup.html" "$ROOT/src/popup.js" "$ROOT/src/debug.js" "$ROOT/src/d
 cp "$ROOT/src/vendor/video-swap-new.user.js" "$ROOT/src/vendor/LICENSE-TwitchAdSolutions" "$ROOT/src/vendor/README.md" "$TMP/src/vendor/"
 cp "$ROOT/src/rules/general-network.json" "$ROOT/src/rules/CREDIT-EasyList.txt" "$TMP/src/rules/"
 for opt in "${OPTIONAL[@]+"${OPTIONAL[@]}"}"; do
+  mkdir -p "$TMP/$(dirname "$opt")"
   cp "$ROOT/$opt" "$TMP/$opt"
 done
 cp "$ROOT/icons/icon16.png" "$ROOT/icons/icon48.png" "$ROOT/icons/icon128.png" "$TMP/icons/"
