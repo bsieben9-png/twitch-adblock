@@ -156,6 +156,121 @@ Deno.test("a reused player XHR returns the second response", async () => {
   }
 });
 
+Deno.test("repeat ad strips do not keep the Blocking ads label up", async () => {
+  const saved = {
+    document: globalThis.document,
+    window: globalThis.window,
+    location: globalThis.location,
+    XMLHttpRequest: globalThis.XMLHttpRequest,
+    fetch: globalThis.fetch,
+    JSON: JSON.parse,
+    setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout,
+  };
+  const nodes = new Map();
+  const listeners = {};
+  const queued = [];
+  let player = null;
+  function element() {
+    const node = {
+      id: "",
+      textContent: "",
+      style: {},
+      parentElement: null,
+      childElementCount: 0,
+      children: [],
+      appendChild(child) {
+        child.parentElement = this;
+        this.children.push(child);
+        this.childElementCount = this.children.length;
+        if (child.id) nodes.set(child.id, child);
+      },
+      remove() {
+        if (this.id) nodes.delete(this.id);
+        this.parentElement = null;
+      },
+    };
+    return new Proxy(node, {
+      set(target, prop, value) {
+        target[prop] = value;
+        if (prop === "id" && value) nodes.set(value, target);
+        return true;
+      },
+    });
+  }
+  function XMLHttpRequest() {}
+  XMLHttpRequest.prototype.open = function () {};
+  XMLHttpRequest.prototype.send = function () {};
+  Object.defineProperty(XMLHttpRequest.prototype, "responseText", { configurable: true, get() { return ""; } });
+  Object.defineProperty(XMLHttpRequest.prototype, "response", { configurable: true, get() { return ""; } });
+  globalThis.setTimeout = (fn, ms) => {
+    const id = queued.length + 1;
+    queued.push({ id, fn, ms, cleared: false, fired: false });
+    return id;
+  };
+  globalThis.clearTimeout = (id) => {
+    const timer = queued.find((item) => item.id === id);
+    if (timer) timer.cleared = true;
+  };
+  globalThis.XMLHttpRequest = XMLHttpRequest;
+  globalThis.document = {
+    readyState: "complete",
+    documentElement: {},
+    getElementById(id) {
+      return nodes.get(id) || null;
+    },
+    createElement() {
+      return element();
+    },
+    querySelector(selector) {
+      if (String(selector).includes("ytd-reel-video-renderer")) return null;
+      return player;
+    },
+    querySelectorAll() {
+      return [];
+    },
+    addEventListener(name, fn) {
+      (listeners[name] ||= []).push(fn);
+    },
+  };
+  globalThis.location = { pathname: "/watch" };
+  globalThis.window = globalThis;
+  globalThis.fetch = async () => new Response(playerBody("videoA"), { status: 200, headers: { "content-type": "application/json" } });
+  delete globalThis.__twitchAdblockYoutube;
+  const hides = () => queued.filter((item) => item.ms === 8000);
+  try {
+    new Function(source)();
+    player = element();
+    await globalThis.fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false");
+    assert(globalThis.document.getElementById("twitch-adblock-notice"), "the first stripped player response shows the label");
+    assert(hides().length === 1 && !hides()[0].cleared, "the hide timer starts once");
+    await globalThis.fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false");
+    await globalThis.fetch("https://www.youtube.com/youtubei/v1/next?prettyPrint=false");
+    assert(hides().length === 1 && !hides()[0].cleared, "later strips do not restart the hide timer");
+    hides()[0].fired = true;
+    hides()[0].fn();
+    assert(!globalThis.document.getElementById("twitch-adblock-notice"), "the label leaves when the timer fires");
+    await globalThis.fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false");
+    assert(!globalThis.document.getElementById("twitch-adblock-notice"), "more strips on this video do not bring the label back");
+    assert(hides().length === 1, "no new hide timer after the label has left");
+    for (const fn of listeners["yt-navigate-start"] || []) fn();
+    await globalThis.fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false");
+    assert(globalThis.document.getElementById("twitch-adblock-notice"), "a new video can show the label again");
+    const fresh = hides().filter((item) => !item.fired && !item.cleared);
+    assert(fresh.length === 1, "the new video gets its own hide timer");
+  } finally {
+    delete globalThis.__twitchAdblockYoutube;
+    JSON.parse = saved.JSON;
+    globalThis.document = saved.document;
+    globalThis.window = saved.window;
+    globalThis.location = saved.location;
+    globalThis.XMLHttpRequest = saved.XMLHttpRequest;
+    globalThis.fetch = saved.fetch;
+    globalThis.setTimeout = saved.setTimeout;
+    globalThis.clearTimeout = saved.clearTimeout;
+  }
+});
+
 Deno.test("watch and shorts parsing keeps an ad-only player payload", () => {
   const savedParse = JSON.parse;
   const nodes = new Map();
