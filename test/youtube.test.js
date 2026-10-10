@@ -310,6 +310,41 @@ Deno.test("browse continuations drop in-feed ads and keep the continuation token
   assertEquals(items[1].continuationItemRenderer.token, "keep-scroll");
 });
 
+Deno.test("search results drop sponsored cards and keep videos", () => {
+  assertEquals(api.kindFor("https://www.youtube.com/youtubei/v1/search?prettyPrint=false"), "browse");
+  assert(api.WATCH_AD_KEYS.includes("searchPyvRenderer"), "search ad item is an ad key");
+  assert(api.HOME_FEED_AD_CSS.includes("ytd-search-pyv-renderer"), "search ad element is hidden if it still renders");
+  const search = {
+    contents: {
+      twoColumnSearchResultsRenderer: {
+        primaryContents: {
+          sectionListRenderer: {
+            contents: [{
+              itemSectionRenderer: {
+                contents: [
+                  { videoRenderer: { videoId: "keep-search" } },
+                  { searchPyvRenderer: { ads: [{ adSlotRenderer: { adSlotMetadata: { slotId: "slot" } } }] } },
+                  { continuationItemRenderer: { token: "next-search" } },
+                ],
+              },
+            }],
+          },
+        },
+      },
+    },
+  };
+  const stripped = api.stripResponseText(JSON.stringify(search), "https://www.youtube.com/youtubei/v1/search");
+  assert(stripped.blocked, "search ads were removed");
+  const items = JSON.parse(stripped.text)
+    .contents.twoColumnSearchResultsRenderer.primaryContents.sectionListRenderer.contents[0]
+    .itemSectionRenderer.contents;
+  assertEquals(items.map((item) => Object.keys(item)[0]), ["videoRenderer", "continuationItemRenderer"]);
+  assertEquals(items[0].videoRenderer.videoId, "keep-search");
+  assert(!stripped.text.includes("searchPyvRenderer"), "search promoted block is gone");
+  assert(!stripped.text.includes("adSlotRenderer"), "search ad slot is gone");
+  assert(source.includes('path.startsWith("/results")'), "search pages strip initial data like browse");
+});
+
 Deno.test("browse kind is recognized and home CSS targets Sponsored cards", () => {
   assertEquals(api.kindFor("https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"), "browse");
   assert(api.HOME_FEED_AD_CSS.includes("ytd-rich-item-renderer:has(ytd-ad-slot-renderer)"), "rich item with ad slot");

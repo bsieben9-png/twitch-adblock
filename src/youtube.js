@@ -25,6 +25,7 @@ function installYoutubeAdblock(target) {
     "brandVideoShelfRenderer",
     "brandVideoSingletonRenderer",
     "statementBannerRenderer",
+    "searchPyvRenderer",
   ];
   const DOM_AD_SELECTORS = [
     ".ytp-ad-overlay-container",
@@ -60,6 +61,7 @@ function installYoutubeAdblock(target) {
     "ytd-statement-banner-renderer",
     "ytm-promoted-sparkles-web-renderer",
     "ytm-ad-slot-renderer",
+    "ytd-search-pyv-renderer",
   ].join(",");
 
   function kindFor(url) {
@@ -77,7 +79,7 @@ function installYoutubeAdblock(target) {
     if (path.includes("/youtubei/v1/player") || path.includes("/youtubei/v1/get_midroll")) return "player";
     if (path.includes("/youtubei/v1/reel/")) return "reel";
     if (path.includes("/youtubei/v1/next") || path.includes("/youtubei/v1/get_watch")) return "watch";
-    if (path.includes("/youtubei/v1/browse")) return "browse";
+    if (path.includes("/youtubei/v1/browse") || path.includes("/youtubei/v1/search")) return "browse";
     return "";
   }
 
@@ -100,6 +102,7 @@ function installYoutubeAdblock(target) {
       || source.includes('"brandVideoShelfRenderer"')
       || source.includes('"brandVideoSingletonRenderer"')
       || source.includes('"statementBannerRenderer"')
+      || source.includes('"searchPyvRenderer"')
       || source.includes("REEL_VIDEO_TYPE_AD")
       || source.includes('"isAd":true')
       || source.includes('"isAd": true');
@@ -631,7 +634,7 @@ function startYoutubeAdblock() {
     const path = location.pathname || "";
     if (path === "/watch") return "watch";
     if (path.startsWith("/shorts")) return "reel";
-    if (path === "/" || path === "") return "browse";
+    if (path === "/" || path === "" || path.startsWith("/results")) return "browse";
     return "";
   }
 
@@ -833,7 +836,7 @@ function startYoutubeAdblock() {
     const path = location.pathname || "";
     const kind = path.startsWith("/shorts")
       ? "reel"
-      : (path === "/watch" ? "watch" : ((path === "/" || path === "") ? "browse" : "player"));
+      : (path === "/watch" ? "watch" : ((path === "/" || path === "" || path.startsWith("/results")) ? "browse" : "player"));
     try {
       if (isAdOnlyPlayer(value)) return value;
       const stripped = api.stripValue(value, kind);
