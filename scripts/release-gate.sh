@@ -73,8 +73,8 @@ pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; FAILS=$((FAILS + 1)); }
 section() { echo; echo "=== $* ==="; }
 
-REQUIRED=(manifest.json src/popup.html src/popup.js src/debug.js src/debug-bridge.js src/vendor/video-swap-new.user.js src/vendor/LICENSE-TwitchAdSolutions src/youtube.js icons/icon16.png icons/icon48.png icons/icon128.png)
-ALLOWED_RE='^(manifest\.json|src/popup\.html|src/popup\.js|src/debug\.js|src/debug-bridge\.js|src/vendor/video-swap-new\.user\.js|src/vendor/LICENSE-TwitchAdSolutions|src/vendor/README\.md|src/youtube\.js|icons/icon16\.png|icons/icon48\.png|icons/icon128\.png)$'
+REQUIRED=(manifest.json src/popup.html src/popup.js src/debug.js src/debug-bridge.js src/vendor/video-swap-new.user.js src/vendor/LICENSE-TwitchAdSolutions src/youtube.js src/general-exclude-hosts.js icons/icon16.png icons/icon48.png icons/icon128.png)
+ALLOWED_RE='^(manifest\.json|src/popup\.html|src/popup\.js|src/debug\.js|src/debug-bridge\.js|src/vendor/video-swap-new\.user\.js|src/vendor/LICENSE-TwitchAdSolutions|src/vendor/README\.md|src/youtube\.js|src/general-exclude-hosts\.js|icons/icon16\.png|icons/icon48\.png|icons/icon128\.png)$'
 
 section "1. Package allowlist + version"
 VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$PKG/manifest.json")"
