@@ -17,7 +17,7 @@ Usage:
 
 Defaults: --dir is the repo root, --expect-version is read from that tree's manifest.
 
-Checks: shippable file allowlist, no privileged manifest fields, Twitch/YouTube host
+Checks: shippable file allowlist, no privileged manifest fields, Twitch/YouTube/Kick host
 coverage, no eval/innerHTML/identity/trackers/unexpected hosts, no chrome.* APIs,
 deno test (when test/ is present), and a small vendor userscript parse smoke.
 EOF
@@ -73,8 +73,8 @@ pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; FAILS=$((FAILS + 1)); }
 section() { echo; echo "=== $* ==="; }
 
-REQUIRED=(manifest.json src/popup.html src/popup.js src/debug.js src/debug-bridge.js src/vendor/video-swap-new.user.js src/vendor/LICENSE-TwitchAdSolutions src/youtube.js icons/icon16.png icons/icon48.png icons/icon128.png)
-ALLOWED_RE='^(manifest\.json|src/popup\.html|src/popup\.js|src/debug\.js|src/debug-bridge\.js|src/vendor/video-swap-new\.user\.js|src/vendor/LICENSE-TwitchAdSolutions|src/vendor/README\.md|src/youtube\.js|icons/icon16\.png|icons/icon48\.png|icons/icon128\.png)$'
+REQUIRED=(manifest.json src/popup.html src/popup.js src/debug.js src/debug-bridge.js src/vendor/video-swap-new.user.js src/vendor/LICENSE-TwitchAdSolutions src/youtube.js src/kick.js icons/icon16.png icons/icon48.png icons/icon128.png)
+ALLOWED_RE='^(manifest\.json|src/popup\.html|src/popup\.js|src/debug\.js|src/debug-bridge\.js|src/vendor/video-swap-new\.user\.js|src/vendor/LICENSE-TwitchAdSolutions|src/vendor/README\.md|src/youtube\.js|src/kick\.js|icons/icon16\.png|icons/icon48\.png|icons/icon128\.png)$'
 
 section "1. Package allowlist + version"
 VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$PKG/manifest.json")"
@@ -156,6 +156,7 @@ print("PASS  no privileged manifest fields")
 scripts = m.get("content_scripts") or []
 twitch = next((s for s in scripts if "src/vendor/video-swap-new.user.js" in (s.get("js") or [])), None)
 youtube = next((s for s in scripts if "src/youtube.js" in (s.get("js") or [])), None)
+kick = next((s for s in scripts if "src/kick.js" in (s.get("js") or [])), None)
 if not twitch:
     print("FAIL  Twitch content_script missing"); sys.exit(1)
 need_t = {"*://twitch.tv/*", "*://*.twitch.tv/*"}
@@ -217,7 +218,23 @@ if got_b != need_b:
     print("FAIL  debug bridge host scope", sorted(got_b)); sys.exit(1)
 print("PASS  debug bridge is isolated and host-scoped")
 
-joined = " ".join(sorted(got_t | got_y))
+if not kick:
+    print("FAIL  Kick content_script missing"); sys.exit(1)
+need_k = {"*://kick.com/*", "*://*.kick.com/*"}
+got_k = set(kick.get("matches") or [])
+if not need_k <= got_k:
+    print("FAIL  Kick matches missing", need_k - got_k); sys.exit(1)
+if kick.get("js") != ["src/kick.js"]:
+    print("FAIL  Kick js", kick.get("js")); sys.exit(1)
+if kick.get("world") != "MAIN":
+    print("FAIL  Kick world", kick.get("world")); sys.exit(1)
+if kick.get("run_at") != "document_start":
+    print("FAIL  Kick run_at", kick.get("run_at")); sys.exit(1)
+if kick.get("all_frames") is not True:
+    print("FAIL  Kick should cover embed frames"); sys.exit(1)
+print("PASS  Kick host coverage", sorted(got_k))
+
+joined = " ".join(sorted(got_t | got_y | got_k))
 for host in ("music.youtube.com", "studio.youtube.com", "youtubekids.com"):
     if host in joined:
         print("FAIL  unexpected host scope", host); sys.exit(1)

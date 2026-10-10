@@ -13,18 +13,21 @@ A free Chrome extension for Twitch live streams and YouTube. It runs only in you
 ## What it does
 
 - **Twitch live:** during a commercial break, it switches to a clean copy of the same stream, then switches back when the break ends. If a clean copy is not available, the ad may play so your video does not freeze.
-- **YouTube:** removes player ads and Sponsored cards on the Home page.
+- **YouTube:** removes player ads and Sponsored cards on the Home page. Shorts ad labels in the Shorts player are hidden.
+- **Kick:** skips an in-player ad when the player can jump back to the stream. If it cannot, the ad plays. The stream stays unmuted. The post-roll cover and the header and feed banners are hidden.
 - VODs and clips are left alone.
+
+The download below stays the stable Latest release. This branch’s Kick support and Shorts hiding ship as a beta, not as that download.
 
 ## Is this safe?
 
-It only runs inside Chrome on Twitch and YouTube.
+It only runs inside Chrome on Twitch, YouTube, and Kick.
 
 <img src="docs/cards-main/safe/02-only-sites.png" width="800" alt="Only Twitch and YouTube. Does not run other webpages or programs on your PC.">
 
 <img src="docs/cards-main/safe/03-no-data.png" width="800" alt="No data collection. No account. Nothing is collected or sent off your computer.">
 
-- **Only Twitch and YouTube** — does not open or run other webpages, and does not install programs on your PC.
+- **Twitch, YouTube, and Kick** — does not open or run other webpages, and does not install programs on your PC.
 - **No data collection** — no account, nothing collected, nothing sent off your computer.
 
 ## Current build

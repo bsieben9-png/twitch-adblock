@@ -58,6 +58,15 @@ function installYoutubeAdblock(target) {
     "ytd-statement-banner-renderer",
     "ytm-promoted-sparkles-web-renderer",
     "ytm-ad-slot-renderer",
+    "ytd-shorts ytd-ad-slot-renderer",
+    "ytd-shorts ytd-in-feed-ad-layout-renderer",
+    "ytd-shorts reels-ad-metadata-view-model",
+    "ytd-shorts yt-ad-metadata-shape",
+    "ytd-shorts ad-badge-view-model",
+    "ytd-shorts ad-button-view-model",
+    "ytd-shorts ytd-companion-slot-renderer",
+    "ytd-shorts ytd-action-companion-ad-renderer",
+    "ytd-shorts [class*=\"ytwReelsAdMetadataViewModelHost\"]",
   ].join(",");
 
   function kindFor(url) {
