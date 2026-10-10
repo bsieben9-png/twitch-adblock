@@ -1,181 +1,49 @@
-import pageSource from "../src/page.js" with { type: "text" };
-import playlistSource from "../src/playlist.js" with { type: "text" };
-
-function assertEquals(actual, expected, label) {
-  const left = JSON.stringify(actual);
-  const right = JSON.stringify(expected);
-  if (left !== right) throw new Error(`${label || "expected equal values"}\n${left}\n${right}`);
-}
+import source from "../src/vendor/video-swap-new.user.js" with { type: "text" };
 
 function assert(condition, label) {
   if (!condition) throw new Error(label);
 }
 
-const playlist = new Function(`${playlistSource}\nreturn TwitchAdblockPlaylist;`)();
-globalThis.TwitchAdblockPlaylist = playlist;
-const guardSource = pageSource.slice(pageSource.indexOf("function createPlaylistGuard"));
-const createPlaylistGuard = new Function(`${guardSource}\nreturn createPlaylistGuard;`)();
-
-const mainMaster = [
-  "#EXTM3U",
-  '#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720,CODECS="avc1.4D401F",FRAME-RATE=30.000',
-  "https://video.example/live-variant.m3u8",
-].join("\n");
-
-const adMedia = [
-  "#EXTM3U",
-  '#EXT-X-DATERANGE:ID="stitched-ad-1",CLASS="twitch-stitched-ad",START-DATE="2024-01-07T20:10:40.960Z",DURATION=15',
-  "#EXT-X-PROGRAM-DATE-TIME:2024-01-07T20:10:40.960Z",
-  "#EXTINF:2.0,",
-  "https://ads.example/ad.ts",
-].join("\n");
-
-const cleanMedia = [
-  "#EXTM3U",
-  "#EXTINF:2.0,live",
-  "https://video.example/live.ts",
-].join("\n");
-
-function masterFor(variantUrl) {
-  return [
-    "#EXTM3U",
-    '#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720,CODECS="avc1.4D401F",FRAME-RATE=30.000',
-    variantUrl,
-  ].join("\n");
-}
-
-function playlistResponse(body) {
-  return new Response(body, { status: 200, headers: { "Content-Type": "application/vnd.apple.mpegurl" } });
-}
-
-Deno.test("a midroll variant is replaced by the first clean backup and the player reloads once", async () => {
-  const tokens = [];
-  const reloads = [];
-  let mainClean = false;
-  const guard = createPlaylistGuard({
-    handoffGraceMs: 0,
-    async fetch(url) {
-      const value = String(url);
-      if (value.includes("/channel/hls/") && value.includes("token=live")) return playlistResponse(mainClean ? masterFor("https://video.example/live-variant.m3u8") : mainMaster);
-      if (value.includes("/channel/hls/") && value.includes("token=autoplay")) return playlistResponse(masterFor("https://video.example/autoplay-variant.m3u8"));
-      if (value.includes("/channel/hls/") && value.includes("token=picture-by-picture")) return playlistResponse(masterFor("https://video.example/pip-variant.m3u8"));
-      if (value.includes("/channel/hls/") && value.includes("token=embed")) return playlistResponse(masterFor("https://video.example/embed-variant.m3u8"));
-      if (value.includes("live-variant") || value.includes("autoplay-variant")) return playlistResponse(mainClean ? cleanMedia : adMedia);
-      if (value.includes("pip-variant") || value.includes("embed-variant")) return playlistResponse(cleanMedia);
-      if (value.includes("https://ads.example/ad.ts")) return new Response("segment", { status: 200 });
-      return new Response("missing", { status: 404 });
-    },
-    async gql(body) {
-      tokens.push({ playerType: body.variables.playerType, platform: body.variables.platform });
-      return JSON.stringify({
-        data: { streamPlaybackAccessToken: { value: body.variables.playerType, signature: "sig" } },
-      });
-    },
-    reload() {
-      reloads.push("reload");
-    },
-    status() {},
-  });
-
-  const masterUrl = "https://usher.ttvnw.net/api/v2/channel/hls/Some_Channel.m3u8?token=live&sig=live";
-  const master = await guard(masterUrl);
-  const masterText = await master.text();
-  assert(masterText.includes("https://video.example/pip-variant.m3u8"), "master variants point at the clean backup");
-  assert(!masterText.includes("live-variant.m3u8"), "the ad master is not what the player reads");
-  assert(tokens.some((item) => item.playerType === "picture-by-picture" && item.platform === "web"), "picture-by-picture is probed");
-  assert(tokens.some((item) => item.playerType === "autoplay" && item.platform === "android") || tokens.some((item) => item.playerType === "embed"), "other backup types are probed in parallel");
-
-  const media = await guard("https://video.example/live-variant.m3u8");
-  const mediaText = await media.text();
-  assert(mediaText.includes("https://video.example/live.ts"), "the variant the player already has is answered with backup video");
-  assert(!mediaText.includes("ads.example"), "the ad segment is not in the swapped playlist");
-  assertEquals(reloads, ["reload"], "one reload when the midroll swap starts");
-
-  const backup = await guard("https://video.example/pip-variant.m3u8");
-  const backupText = await backup.text();
-  assert(backupText.includes("https://video.example/live.ts"), "backup playback stays on the clean playlist");
-  assertEquals(reloads, ["reload"], "checking the main stream does not reload again while ads remain");
-
-  mainClean = true;
-  await guard("https://video.example/pip-variant.m3u8");
-  assertEquals(reloads, ["reload", "reload"], "playback returns to the main stream when the ad break ends");
-  const restored = await guard(masterUrl);
-  const restoredText = await restored.text();
-  assert(restoredText.includes("https://video.example/live-variant.m3u8"), "the next master is the normal stream");
-  assertEquals(reloads, ["reload", "reload"], "a clean master does not reload again");
+Deno.test("backup probes are sequential in OPT_BACKUP_PLAYER_TYPES order", () => {
+  const start = source.indexOf("async function onFoundAd");
+  const end = source.indexOf("function stripAdSegments", start);
+  const block = source.slice(start, end);
+  assert(block.includes("for (let i = 0; i < playerTypes.length; i++)"), "sequential for-loop over player types");
+  assert(block.includes("const playerType = playerTypes[i];"), "uses index order, not a race");
+  assert(block.includes("if (streamInfo.BackupEncodingsStatus.get(playerType) === 1)"), "stops after the first accepted type");
+  assert(block.includes("break;"), "breaks out once a backup latches");
 });
 
-Deno.test("a higher-quality clean backup wins when probes finish in the grace window", async () => {
-  const chosen = [];
-  const lowMaster = [
-    "#EXTM3U",
-    '#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360,CODECS="avc1.4D401F",FRAME-RATE=30.000',
-    "https://video.example/pip-low.m3u8",
-  ].join("\n");
-  const highMaster = [
-    "#EXTM3U",
-    '#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720,CODECS="avc1.4D401F",FRAME-RATE=30.000',
-    "https://video.example/embed-high.m3u8",
-  ].join("\n");
-  const guard = createPlaylistGuard({
-    handoffGraceMs: 40,
-    async fetch(url) {
-      const value = String(url);
-      if (value.includes("token=live")) return playlistResponse(mainMaster);
-      if (value.includes("token=picture-by-picture")) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        return playlistResponse(lowMaster);
-      }
-      if (value.includes("token=embed")) {
-        await new Promise((resolve) => setTimeout(resolve, 15));
-        return playlistResponse(highMaster);
-      }
-      if (value.includes("token=autoplay")) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        return playlistResponse(masterFor("https://video.example/autoplay-variant.m3u8"));
-      }
-      if (value.includes("live-variant") || value.includes("autoplay-variant")) return playlistResponse(adMedia);
-      if (value.includes("pip-low") || value.includes("embed-high")) return playlistResponse(cleanMedia);
-      return new Response("missing", { status: 404 });
-    },
-    async gql(body) {
-      return JSON.stringify({
-        data: { streamPlaybackAccessToken: { value: body.variables.playerType, signature: "sig" } },
-      });
-    },
-    reload() {},
-    status() {},
-  });
-
-  const master = await guard("https://usher.ttvnw.net/api/v2/channel/hls/Some_Channel.m3u8?token=live&sig=live");
-  const masterText = await master.text();
-  chosen.push(masterText.includes("embed-high.m3u8"), masterText.includes("pip-low.m3u8"));
-  assert(masterText.includes("https://video.example/embed-high.m3u8"), "grace window keeps the closer quality backup");
-  assert(!masterText.includes("pip-low.m3u8"), "lower quality is not preferred when a match exists");
+Deno.test("a dirty non-final backup is skipped; the final type is used anyway", () => {
+  const start = source.indexOf("async function onFoundAd");
+  const end = source.indexOf("function stripAdSegments", start);
+  const block = source.slice(start, end);
+  assert(
+    block.includes("(!backTextStr.includes(AD_SIGNIFIER)") && block.includes("|| i >= playerTypes.length - 1)"),
+    "clean OR last-index accepts the backup media body",
+  );
+  assert(block.includes("streamInfo.BackupEncodingsStatus.set(playerType, 0)"), "failed earlier types stay in the map as 0");
 });
 
-Deno.test("embed tokens on the response root still count", async () => {
-  const guard = createPlaylistGuard({
-    handoffGraceMs: 0,
-    async fetch(url) {
-      const value = String(url);
-      if (value.includes("token=live")) return playlistResponse(mainMaster);
-      if (value.includes("/channel/hls/")) return playlistResponse(masterFor("https://video.example/embed-variant.m3u8"));
-      if (value.includes("live-variant")) return playlistResponse(adMedia);
-      if (value.includes("embed-variant")) return playlistResponse(cleanMedia);
-      return new Response("missing", { status: 404 });
-    },
-    async gql(body) {
-      if (body.variables.playerType !== "embed") {
-        return JSON.stringify({ data: { streamPlaybackAccessToken: null } });
-      }
-      return JSON.stringify({ streamPlaybackAccessToken: { value: "embed", signature: "sig" } });
-    },
-    reload() {},
-    status() {},
-  });
+Deno.test("when every backup type has been tried, the real midroll playlist is returned", () => {
+  const start = source.indexOf("async function onFoundAd");
+  const end = source.indexOf("function stripAdSegments", start);
+  const block = source.slice(start, end);
+  const early = block.indexOf("BackupEncodingsStatus.size >= playerTypes.length");
+  const ret = block.indexOf("return textStr;", early);
+  assert(early !== -1 && ret !== -1 && ret - early < 120, "exhausted status returns textStr immediately");
+});
 
-  const master = await guard("https://usher.ttvnw.net/api/v2/channel/hls/Some_Channel.m3u8?token=live&sig=live");
-  const masterText = await master.text();
-  assert(masterText.includes("https://video.example/embed-variant.m3u8"), "a root embed token is accepted");
+Deno.test("already-latched BackupEncodings keeps serving the backup ladder", () => {
+  const start = source.indexOf("async function onFoundAd");
+  const end = source.indexOf("function stripAdSegments", start);
+  const block = source.slice(start, end);
+  assert(block.includes("streamInfo.BackupEncodings && !streamInfo.BackupEncodings.includes(url)"), "reuses latched encodings");
+  assert(block.includes("getStreamUrlForResolution(streamInfo.BackupEncodings, resolutionInfo)"), "resolution mapped onto backup");
+});
+
+Deno.test("master encodings merge keeps the main UI resolution list on a low-res backup", () => {
+  assert(source.includes("The stream doesn't load unless each url line is unique"), "unique URL lines for merged encodings");
+  assert(source.includes("mapVariantsToBackup") === false, "hand-rewrite mapper is not used");
+  assert(source.includes("lowResUrl + ' '.repeat(j + 1)"), "upstream unique-suffix merge");
 });

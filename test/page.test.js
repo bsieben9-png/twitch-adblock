@@ -1,139 +1,73 @@
-import source from "../src/page.js" with { type: "text" };
+import source from "../src/vendor/video-swap-new.user.js" with { type: "text" };
 
 function assert(condition, label) {
   if (!condition) throw new Error(label);
 }
 
-function assertEquals(actual, expected, label) {
-  const left = JSON.stringify(actual);
-  const right = JSON.stringify(expected);
-  if (left !== right) throw new Error(`${label || "expected equal values"}\n${left}\n${right}`);
-}
+Deno.test("Twitch MAIN script is unmodified TwitchAdSolutions video-swap-new userscript", () => {
+  assert(source.includes("// @name         TwitchAdSolutions (video-swap-new)"), "userscript name");
+  assert(source.includes("// @version      1.55"), "userscript version 1.55");
+  assert(source.includes("ourTwitchAdSolutionsVersion = 23"), "upstream conflict version");
+  assert(source.includes("hookWorkerFetch (video-swap-new)"), "worker fetch hook log");
+  assert(!source.includes("function createPlaylistGuard"), "hand rewrite guard is gone");
+  assert(!source.includes("failOpenShowAds"), "hand rewrite fail-open helper is gone");
+});
 
-Deno.test("the worker prelude installs the playlist on globalThis", () => {
+Deno.test("backup player types match upstream OPT_BACKUP_PLAYER_TYPES order", () => {
   assert(
-    source.includes("installTwitchAdblockPlaylist(globalThis.TwitchAdblockPlaylist = {})"),
-    "worker prelude must assign globalThis.TwitchAdblockPlaylist",
+    source.includes("OPT_BACKUP_PLAYER_TYPES = [ 'autoplay', 'picture-by-picture', /*'autoplay-ALT',*/ 'embed' ]"),
+    "try autoplay, then picture-by-picture, then embed",
   );
+  assert(!source.includes("handoffGraceMs"), "no parallel grace-window rewrite");
+  assert(!source.includes("backupMatchScore"), "no score-ranked backup rewrite");
+  assert(!source.includes("findCleanBackups"), "no parallel clean-backup race");
+});
+
+Deno.test("onFoundAd accepts the last backup even when dirty, then fails open when exhausted", () => {
+  assert(source.includes("i >= playerTypes.length - 1"), "last player type is accepted even with ad tags");
   assert(
-    !source.includes("const TwitchAdblockPlaylist = {}"),
-    "a const binding is not visible as globalThis.TwitchAdblockPlaylist",
+    source.includes("if (streamInfo.BackupEncodingsStatus.size >= playerTypes.length)"),
+    "exhausted backup map returns the real playlist text",
   );
+  const start = source.indexOf("async function onFoundAd");
+  const end = source.indexOf("function stripAdSegments", start);
+  const block = source.slice(start, end);
+  assert(block.includes("return textStr;"), "exhausted path returns the incoming playlist");
+  assert(block.includes("BackupEncodingsStatus.set(playerType, 0)"), "dirty non-final types are marked tried");
+  assert(block.includes("BackupEncodingsStatus.set(playerType, 1)"), "accepted backup type is latched");
 });
 
-Deno.test("the gql reply keeps the worker after the event finishes", () => {
-  assert(source.includes("const worker = event.currentTarget;"), "capture the worker before pageGql");
-  assert(!source.includes("event.currentTarget.postMessage"), "currentTarget is null after the await");
+Deno.test("processM3U8 uses AD_SIGNIFIER and reloads off backup when main is clean", () => {
+  assert(source.includes("AD_SIGNIFIER = 'stitched-ad'"), "ad tag matches upstream");
+  assert(source.includes("LIVE_SIGNIFIER = ',live'"), "live EXTINF signifier matches upstream");
+  assert(source.includes("IsMovingOffBackupEncodings"), "moving-off guard matches upstream");
+  assert(source.includes("No more ads on main stream. Triggering player reload"), "leave-backup reload log");
+  assert(source.includes("postMessage({key:'UboReloadPlayer'})"), "worker asks the page to reload");
 });
 
-Deno.test("fail-open clones a Request before the body is used", () => {
-  assert(source.includes("const replay = input instanceof Request ? input.clone() : input;"), "page fetch keeps a replayable request");
-  assert(source.includes("const replay = typeof Request !== \"undefined\" && input instanceof Request ? input.clone() : input;"), "worker fetch keeps a replayable request");
+Deno.test("stripAdSegments blanks cached ad fetches instead of rewriting the live ladder away", () => {
+  assert(source.includes("function stripAdSegments"), "upstream strip helper present");
+  assert(source.includes("AdSegmentCache"), "ad segment cache present");
+  assert(source.includes("data:video/mp4;base64,"), "blank mp4 response for cached ad segments");
 });
 
-Deno.test("a failed variant probe does not count as a clean backup", () => {
-  assert(source.includes("if (!response.ok) continue;"), "a missing rung is not a clean stream");
-  assert(source.includes('if (!body.startsWith("#EXTM3U")) continue;'), "a non-playlist body is not a clean stream");
-  assert(source.includes("return playlist.hasAdBreak(masterText) || null;"), "a master with no variant is not a clean stream");
-  assert(source.includes("if (probe === null || probe === true) return null;"), "skip a backup that did not load or still has ads");
-  assert(source.includes("session.tried.clear();"), "a good backup can be chosen again after the retry window");
-});
-
-Deno.test("sampleHasAds stops on the first clean quality playlist", () => {
-  const start = source.indexOf("async function sampleHasAds");
-  const end = source.indexOf("async function backupMaster", start);
-  const sample = source.slice(start, end);
-  assert(sample.includes("return false;"), "a clean rung ends the probe early");
-  assert(sample.includes("if (variants[0]) enqueue(variants[0]);"), "the first listed rung is preferred");
-  assert(sample.includes("knownUrl"), "a known media body is reused when present");
-});
-
-Deno.test("playback rewrite gates on the gql url before reading a Request body", () => {
-  assert(source.includes('if (!url.includes("gql")) return { input, init };'), "page skips body read for non-gql fetches");
-  const workerStart = source.indexOf("function startTwitchAdblockWorker");
-  const workerFetch = source.slice(workerStart);
-  assert(workerFetch.includes('if (url.includes("gql"))'), "worker gates body read on gql");
+Deno.test("access token force and backup gql match upstream", () => {
+  assert(source.includes("OPT_FORCE_ACCESS_TOKEN_PLAYER_TYPE = 'popout'"), "forced player type is popout");
+  assert(source.includes("ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9"), "PlaybackAccessToken hash");
   assert(
-    workerFetch.indexOf('if (url.includes("gql"))') < workerFetch.indexOf("input.clone().text()"),
-    "worker reads the Request body only after the gql check",
-  );
-});
-
-Deno.test("backup graphql uses only headers gql.twitch.tv allows", () => {
-  assert(!source.includes("X-Twitch-Adblock"), "that header is not in Access-Control-Allow-Headers");
-  assert(!source.includes('defineProperty(document, "visibilityState"'), "Twitch reads document.hidden, not this spoof");
-});
-
-Deno.test("backup player types prefer typically clean streams", () => {
-  assert(
-    source.includes('const backupTypes = ["picture-by-picture", "embed", "autoplay"];'),
-    "try picture-by-picture and embed before autoplay",
-  );
-  assert(!source.includes("mobile_web"), "does not request a mobile web backup");
-  assert(
-    source.includes('platform: playerType === "autoplay" ? "android" : "web"'),
+    source.includes("platform: realPlayerType == 'autoplay' ? 'android' : 'web'"),
     "autoplay tokens use the android platform",
   );
-  assert(source.includes("findCleanBackup"), "backup probes run together for a faster handoff");
-  assert(source.includes("backupMatchScore"), "a clean backup is scored against the live ladder");
-  assert(source.includes("handoffGraceMs"), "a short grace window can pick a better quality peer");
-  assert(source.includes("scheduleReload"), "reload waits for the clean playlist response");
-  assert(source.includes("}, 800);"), "quality restores sooner after a player reload");
+  assert(source.includes("parent_domains"), "embed parent_domains stripping stays");
 });
 
-Deno.test("a conflict with another Twitch ad script is logged once", () => {
-  assert(source.includes("warnConflictOnce"), "detect another fetch/Worker patcher");
-  assert(source.includes("__twitchAdblockConflictWarned"), "log the conflict warning only once");
-  assert(source.includes("twitch-videoad"), "the warning names the common uBlock script");
-});
-
-Deno.test("the blocking label counts midrolls in this tab session", () => {
-  assert(source.includes("noticeBlocks"), "session counter lives only in memory");
-  assert(source.includes("Blocking ads (${noticeBlocks})"), "label shows the in-session count");
-  assert(source.includes("if (!noticeOn) noticeBlocks += 1"), "count rises once per blocking streak");
-});
-
-Deno.test("a picture-by-picture token request is dropped before the chat mini player opens", () => {
-  const start = source.indexOf("function rewritePlaybackBody");
-  const rewritePlaybackBody = new Function(`${source.slice(start)}\nreturn rewritePlaybackBody;`)();
-  const onlyPip = JSON.stringify({ operationName: "PlaybackAccessToken", variables: { playerType: "picture-by-picture" } });
-  assertEquals(rewritePlaybackBody(onlyPip).body, "");
-  const batch = JSON.stringify([
-    { operationName: "PlaybackAccessToken", variables: { playerType: "site", login: "Some_Channel" } },
-    { operationName: "PlaybackAccessToken", variables: { playerType: "picture-by-picture", login: "Some_Channel" } },
-  ]);
-  const kept = JSON.parse(rewritePlaybackBody(batch).body);
-  assertEquals(kept.length, 1);
-  assertEquals(kept[0].variables.playerType, "popout");
-  assertEquals(kept[0].variables.login, "Some_Channel");
-});
-
-Deno.test("a midroll variant is answered with the backup stream", () => {
-  assert(source.includes("const streamByUrl = new Map();"), "variant urls stay tied to the channel");
-  assert(source.includes("if (!session.reloadedForBackup)"), "reload once when the player is already on the ad playlist");
-  assert(source.includes("session.mainVariantUrl"), "the main variant is checked so playback can return");
-  assert(source.includes("json.streamPlaybackAccessToken"), "embed tokens may sit on the response root");
-  assert(source.includes("await env.gql(body)"), "backup tokens use the original gql fetch");
-  assert(source.includes('await nativeFetch("https://gql.twitch.tv/gql"'), "page gql does not go through the hooked fetch");
-});
-
-Deno.test("a background tab stays visible to the player", () => {
-  assert(source.includes('defineProperty(document, "hidden"'), "Twitch pauses when document.hidden is true");
-  assert(source.includes("lowLatencyModeEnabled"), "a reload keeps the low-latency setting");
-});
-
-Deno.test("player maps and worker waits do not live for the whole tab", () => {
-  assert(source.includes("const variantLimit = 64;"), "a channel keeps a bounded set of variant urls");
-  assert(source.includes("sessions.delete(channel)"), "a finished channel session is removed");
-  assert(source.includes("const sessionTtl = 120000;"), "an idle channel session expires");
-  assert(source.includes("URL.revokeObjectURL(blobUrl)"), "the player worker blob is revoked");
-  assert(source.includes('worker.removeEventListener("message", onWorkerMessage, true)'), "the worker listener is removed");
-  assert(source.includes('reject(new Error("gql timed out"))'), "an unanswered worker graphql wait ends");
-  assert(source.includes("clearTimeout(waiter.timer)"), "a graphql reply cancels the wait");
-});
-
-Deno.test("the blocking label follows the media playlist, not the live master", () => {
-  assert(!source.includes("env.status(true)"), "a live master must not latch the label on");
-  assert(source.includes("env.status(stripped.stripped)"), "media playlists show the label only while a segment was replaced");
-  assert(source.includes("if (!session.usingBackup) env.status(false);"), "an unknown probe clears the label when no backup is playing");
+Deno.test("reloadTwitchPlayer matches upstream setSrc handoff", () => {
+  const start = source.indexOf("function reloadTwitchPlayer");
+  assert(start !== -1, "reloadTwitchPlayer exists");
+  const end = source.indexOf("function onContentLoaded", start);
+  const block = source.slice(start, end);
+  assert(block.includes("setSrc({ isNewMediaPlayerInstance: true, refreshAccessToken: true })"), "setSrc refreshes usher");
+  assert(block.includes("player.play()"), "play after setSrc");
+  assert(!block.includes("getHTMLVideoElement"), "no HTMLVideoElement play nudge");
+  assert(!block.includes("claimReload"), "no hand-rewrite reload ceiling inside upstream reload");
 });

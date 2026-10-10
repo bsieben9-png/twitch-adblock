@@ -1,31 +1,37 @@
 # twitch-adblock
 
-<img src="docs/what-it-is.png" width="800" alt="twitch-adblock blocks Twitch and YouTube ads while the video keeps playing: no ad-break screens, no banners over the stream, no freezing">
+**Watch the live stream. The ad does not get the screen.**
+
+- The stream keeps playing. No black screen, no reload loop.
+- Works with several live tabs open.
+- Free. No account. Nothing is sent off your computer.
+
+<img src="docs/what-it-is.png" width="800" alt="Watch the live stream. The ad does not get the screen. The stream keeps playing, several live tabs can stay open, and nothing is sent off your computer.">
 
 A Chrome extension that blocks ads on Twitch live streams and YouTube. It is free, runs only in your browser, and sends nothing anywhere.
 
 ## What it does
 
-- **Twitch live:** when a midroll starts, it switches to an ad-free backup of the same stream and switches back when the break ends. If no clean backup is available, it lets the ad play instead of freezing your video.
+- **Twitch live:** uses the upstream TwitchAdSolutions video-swap-new script (unmodified). During a midroll it switches to an ad-free backup of the same stream and switches back when the break ends. If no clean backup is available, it lets the ad play instead of freezing your video.
 - **YouTube:** removes player ads and the Sponsored cards on the home page.
 - **Kick:** skips an in-player ad when the player can jump back to the stream. If it cannot, the ad plays. The stream stays unmuted. The post-roll cover and the header and feed banners are hidden.
 - Twitch VODs and clips pass through untouched.
 
-## Current version: v0.1.21 (beta)
+## Current stable build: v0.2.3
 
-<img src="docs/whats-new.png" width="800" alt="What's new in v0.1.21: the black-screen reload loop is fixed, at most 2 player reloads per minute, it backs off after a false alarm so an ad may play instead of freezing, debug on by default (temporary), plus everything in v0.1.20">
+<img src="docs/whats-new.png" width="800" alt="Current stable build v0.2.3. The toolbar icon is a gecko head. Twitch live uses video-swap-new. YouTube player ads and home Sponsored cards stay. Debug stays off until you turn it on. On a Twitch tab, ON answers and Copy debug includes the log.">
 
-This is a beta, and it is the only release right now. Midrolls are caught without a page reload, the player reloads at most twice per minute, it backs off after a false alarm (an ad may play instead of freezing), and newer Twitch ad markers are cleaned out of the stream. Kick is not in this zip yet.
+The toolbar icon is a gecko head. Twitch live still uses video-swap-new. YouTube blocking is unchanged. Kick on this branch is not the Latest download.
 
-A small debug popup is **on by default for now (temporary)**. It keeps a short log in memory on your device, hides login tokens, and sends nothing out. Open the extension popup to turn it off or to copy the log if you need to report a problem.
+Debug stays **off** until you turn it on. On a Twitch tab, ON answers the popup and Copy debug includes the log from that tab. The log stays on your device, hides login tokens, and sends nothing out.
 
-Details are in the [v0.1.21 release notes](https://github.com/gecko-of-shadow/twitch-adblock/releases/tag/v0.1.21).
+Details are in the [v0.2.3 release notes](https://github.com/gecko-of-shadow/twitch-adblock/releases/tag/v0.2.3).
 
 ## Install
 
-<img src="docs/install-steps.png" width="500" alt="How to install twitch-adblock in 6 steps">
+<img src="docs/install-steps.png" width="800" alt="Install the current stable zip: download twitch-adblock-0.2.3.zip, unzip it, open chrome://extensions, turn on Developer mode, and Load unpacked the folder with manifest.json.">
 
-**[Download twitch-adblock-0.1.21.zip](https://github.com/gecko-of-shadow/twitch-adblock/releases/download/v0.1.21/twitch-adblock-0.1.21.zip)**
+**[Download twitch-adblock-0.2.3.zip](https://github.com/gecko-of-shadow/twitch-adblock/releases/download/v0.2.3/twitch-adblock-0.2.3.zip)**
 
 1. Download the zip above and unzip it.
 2. Open `chrome://extensions` and turn on **Developer mode**.
@@ -34,11 +40,11 @@ Details are in the [v0.1.21 release notes](https://github.com/gecko-of-shadow/tw
 
 ## Found a problem?
 
-<img src="docs/found-a-problem.png" width="800" alt="Found a problem? 1. Open the extension popup. 2. Check that Debug is ON. 3. Click Copy debug. 4. Paste it into a GitHub issue.">
+<img src="docs/found-a-problem.png" width="800" alt="Found a problem? Open the extension popup, check that Debug is ON, click Copy debug, and paste it into a GitHub issue.">
 
 ## Notes
 
 - Backup swaps can change the picture quality briefly. Playback should keep going.
 - Ads already baked into a YouTube video file still play.
-- All releases are listed on the [releases page](https://github.com/gecko-of-shadow/twitch-adblock/releases).
+- Older builds stay on the [releases page](https://github.com/gecko-of-shadow/twitch-adblock/releases) if you need to go back.
 - Development: `deno test --no-lock test/` · `bash scripts/release-gate.sh` · `bash scripts/pack-zip.sh`

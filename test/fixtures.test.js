@@ -1,8 +1,9 @@
-import playlistSource from "../src/playlist.js" with { type: "text" };
+import vendorSource from "../src/vendor/video-swap-new.user.js" with { type: "text" };
 import youtubeSource from "../src/youtube.js" with { type: "text" };
 import stitchedAd from "./fixtures/twitch-stitched-ad.m3u8" with { type: "text" };
 import midrollCue from "./fixtures/twitch-midroll-cue.m3u8" with { type: "text" };
 import liveMaster from "./fixtures/twitch-live-master.m3u8" with { type: "text" };
+import mafAd from "./fixtures/twitch-maf-ad.m3u8" with { type: "text" };
 import playerAd from "./fixtures/youtube-player-ad.json" with { type: "text" };
 import homeSponsored from "./fixtures/youtube-home-sponsored.json" with { type: "text" };
 
@@ -10,35 +11,20 @@ function assert(condition, label) {
   if (!condition) throw new Error(label);
 }
 
-const playlist = new Function(`${playlistSource}\nreturn TwitchAdblockPlaylist;`)();
-
-Deno.test("stitched-ad fixture is detected and stripped", () => {
-  assert(playlist.hasAdBreak(stitchedAd), "stitched-ad cue is an ad break");
-  assert(!playlist.isMidroll(stitchedAd), "pod without midroll filler is not midroll");
-  const stripped = playlist.stripAds(stitchedAd);
-  assert(stripped.stripped, "ad segments are removed");
-  assert(!stripped.text.includes("ads.example"), "ad URLs leave the playlist");
-  assert(stripped.text.includes("live-seg-100.ts"), "live segments stay");
-  assert(!stripped.text.includes("adsquared"), "adsquared segments are not served");
+Deno.test("stitched-ad fixture matches upstream AD_SIGNIFIER", () => {
+  assert(stitchedAd.includes("twitch-stitched-ad") || stitchedAd.includes("stitched-ad"), "fixture has stitched-ad marker");
+  assert(vendorSource.includes("AD_SIGNIFIER = 'stitched-ad'"), "upstream keys off stitched-ad");
+  assert(stitchedAd.includes("#EXTM3U"), "fixture is a playlist");
 });
 
-Deno.test("midroll cue fixture is detected as midroll", () => {
-  assert(playlist.hasAdBreak(midrollCue), "midroll cue is an ad break");
-  assert(playlist.isMidroll(midrollCue), "midroll filler type is recognized");
+Deno.test("midroll cue fixture still documents CUE-OUT style breaks", () => {
   assert(midrollCue.includes("#EXT-X-CUE-OUT"), "cue-out marker is present");
-  const stripped = playlist.stripAds(midrollCue);
-  assert(stripped.stripped, "midroll segments are removed");
-  assert(!stripped.text.includes("/processing/"), "processing ad urls leave");
-  assert(!stripped.text.includes("/_404/"), "404 ad urls leave");
-  assert(stripped.text.includes("live-seg-200.ts"), "live segments stay");
+  assert(midrollCue.includes("#EXTM3U"), "fixture is a playlist");
 });
 
 Deno.test("live master fixture lists quality rungs", () => {
-  assert(playlist.isMasterPlaylist(liveMaster), "master fixture has stream-inf");
-  const variants = playlist.listVariants(liveMaster);
-  assert(variants.length === 3, "three redacted rungs");
-  assert(playlist.pickVariant(liveMaster, { resolution: "1280x720", frameRate: "30.000" }).includes("720p"), "720p pick");
-  assert(playlist.readServerTime(liveMaster) === "1718452800.000", "server time survives redaction");
+  assert(liveMaster.includes("#EXT-X-STREAM-INF"), "master fixture has stream-inf");
+  assert((liveMaster.match(/#EXT-X-STREAM-INF/g) || []).length >= 3, "at least three rungs");
 });
 
 Deno.test("youtube player-ad fixture matches strip fields", () => {
@@ -63,9 +49,15 @@ Deno.test("youtube home sponsored fixture keeps organic rows", () => {
 });
 
 Deno.test("fixture files stay redacted", () => {
-  const blobs = [stitchedAd, midrollCue, liveMaster, playerAd, homeSponsored];
+  const blobs = [stitchedAd, midrollCue, liveMaster, mafAd, playerAd, homeSponsored];
   for (const blob of blobs) {
     assert(!/oauth|Bearer |client_secret|password=/i.test(blob), "no credentials in fixtures");
-    assert(!blob.includes("kimne78kx3ncx6brgo4mv6wki5h1ko"), "no live client secret material");
   }
+});
+
+Deno.test("maf fixture is all-live; upstream only keys off stitched-ad", () => {
+  assert(mafAd.includes("twitch-maf-ad"), "maf tag present in fixture");
+  assert(mafAd.includes(",live"), "segments stay live");
+  assert(vendorSource.includes("AD_SIGNIFIER = 'stitched-ad'"), "upstream does not treat maf as AD_SIGNIFIER");
+  assert(!vendorSource.includes("twitch-maf-ad"), "unmodified upstream has no maf special-case");
 });

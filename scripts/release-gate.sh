@@ -19,7 +19,7 @@ Defaults: --dir is the repo root, --expect-version is read from that tree's mani
 
 Checks: shippable file allowlist, no privileged manifest fields, Twitch/YouTube/Kick host
 coverage, no eval/innerHTML/identity/trackers/unexpected hosts, no chrome.* APIs,
-deno test (when test/ is present), and a small playlist fuzz smoke.
+deno test (when test/ is present), and a small vendor userscript parse smoke.
 EOF
   exit 2
 }
@@ -73,8 +73,8 @@ pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; FAILS=$((FAILS + 1)); }
 section() { echo; echo "=== $* ==="; }
 
-REQUIRED=(manifest.json src/page.js src/playlist.js src/youtube.js src/kick.js icons/icon16.png icons/icon48.png icons/icon128.png)
-ALLOWED_RE='^(manifest\.json|src/page\.js|src/playlist\.js|src/youtube\.js|src/kick\.js|icons/icon16\.png|icons/icon48\.png|icons/icon128\.png)$'
+REQUIRED=(manifest.json src/popup.html src/popup.js src/debug.js src/debug-bridge.js src/vendor/video-swap-new.user.js src/vendor/LICENSE-TwitchAdSolutions src/youtube.js src/kick.js icons/icon16.png icons/icon48.png icons/icon128.png)
+ALLOWED_RE='^(manifest\.json|src/popup\.html|src/popup\.js|src/debug\.js|src/debug-bridge\.js|src/vendor/video-swap-new\.user\.js|src/vendor/LICENSE-TwitchAdSolutions|src/vendor/README\.md|src/youtube\.js|src/kick\.js|icons/icon16\.png|icons/icon48\.png|icons/icon128\.png)$'
 
 section "1. Package allowlist + version"
 VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$PKG/manifest.json")"
@@ -125,7 +125,18 @@ else
   pass "repo mode: allowlist checked on shippable paths only"
 fi
 if [[ "$ALLOW_OK" -eq 1 ]]; then pass "shippable file allowlist"; else fail "shippable file allowlist"; fi
-if [[ -f "$PKG/src/popup.html" ]]; then fail "popup.html must not ship"; else pass "no popup.html in package"; fi
+if [[ -f "$PKG/src/popup.html" && -f "$PKG/src/popup.js" ]]; then
+  pass "temporary debug popup is packaged"
+else
+  fail "temporary debug popup files missing"
+fi
+if [[ -f "$PKG/popup.html" || -f "$PKG/popup.js" ]]; then fail "popup must live in src/ (zip holds manifest.json, src/, icons/ only)"; else pass "popup lives in src/"; fi
+if rg -n --pcre2 '<script(?![^>]*\bsrc="popup\.js")|onclick=|javascript:' "$PKG/src/popup.html" >/tmp/gate-popup.txt 2>/dev/null; then
+  cat /tmp/gate-popup.txt
+  fail "popup.html must load only popup.js"
+else
+  pass "popup.html loads only popup.js"
+fi
 echo "  package bytes: $SIZE"
 if [[ "$SIZE" -gt 5000000 ]]; then fail "package unexpectedly large (>5MB)"; else pass "package size sane"; fi
 
@@ -143,7 +154,7 @@ if bad:
 print("PASS  no privileged manifest fields")
 
 scripts = m.get("content_scripts") or []
-twitch = next((s for s in scripts if "src/page.js" in (s.get("js") or [])), None)
+twitch = next((s for s in scripts if "src/vendor/video-swap-new.user.js" in (s.get("js") or [])), None)
 youtube = next((s for s in scripts if "src/youtube.js" in (s.get("js") or [])), None)
 kick = next((s for s in scripts if "src/kick.js" in (s.get("js") or [])), None)
 if not twitch:
@@ -152,9 +163,29 @@ need_t = {"*://twitch.tv/*", "*://*.twitch.tv/*"}
 got_t = set(twitch.get("matches") or [])
 if not need_t <= got_t:
     print("FAIL  Twitch matches missing", need_t - got_t); sys.exit(1)
-if twitch.get("js") != ["src/playlist.js", "src/page.js"]:
+if twitch.get("js") != ["src/vendor/video-swap-new.user.js"]:
     print("FAIL  Twitch js order", twitch.get("js")); sys.exit(1)
+if twitch.get("world") != "MAIN":
+    print("FAIL  Twitch world", twitch.get("world")); sys.exit(1)
+if twitch.get("run_at") != "document_start":
+    print("FAIL  Twitch run_at", twitch.get("run_at")); sys.exit(1)
+if twitch.get("all_frames") is not True:
+    print("FAIL  Twitch all_frames", twitch.get("all_frames")); sys.exit(1)
 print("PASS  Twitch host coverage", sorted(got_t))
+
+reply = next((s for s in scripts if s.get("world") == "MAIN" and s.get("js") == ["src/debug.js"]), None)
+if not reply:
+    print("FAIL  Twitch debug reply script missing"); sys.exit(1)
+got_r = set(reply.get("matches") or [])
+if got_r != need_t:
+    print("FAIL  Twitch debug reply matches", sorted(got_r)); sys.exit(1)
+if reply.get("run_at") != "document_start":
+    print("FAIL  Twitch debug reply run_at", reply.get("run_at")); sys.exit(1)
+if reply.get("all_frames") is True:
+    print("FAIL  Twitch debug reply must stay on the top frame"); sys.exit(1)
+if scripts.index(reply) > scripts.index(twitch):
+    print("FAIL  Twitch debug reply must load before the vendor script"); sys.exit(1)
+print("PASS  Twitch debug reply loads in the top frame before the vendor script")
 
 if not youtube:
     print("FAIL  YouTube content_script missing"); sys.exit(1)
@@ -166,7 +197,26 @@ if youtube.get("world") != "MAIN":
     print("FAIL  YouTube world", youtube.get("world")); sys.exit(1)
 if youtube.get("all_frames") is True:
     print("FAIL  YouTube should not use all_frames"); sys.exit(1)
+if youtube.get("js") != ["src/debug.js", "src/youtube.js"]:
+    print("FAIL  YouTube js order", youtube.get("js")); sys.exit(1)
 print("PASS  YouTube host coverage", sorted(got_y))
+
+if m.get("action", {}).get("default_popup") != "src/popup.html":
+    print("FAIL  debug popup must be action.default_popup"); sys.exit(1)
+print("PASS  action popup is src/popup.html")
+
+bridge = next((s for s in scripts if "src/debug-bridge.js" in (s.get("js") or [])), None)
+if not bridge:
+    print("FAIL  debug bridge content script missing"); sys.exit(1)
+if bridge.get("world") == "MAIN":
+    print("FAIL  debug bridge must stay out of the page world"); sys.exit(1)
+if bridge.get("js") != ["src/debug-bridge.js"]:
+    print("FAIL  debug bridge js", bridge.get("js")); sys.exit(1)
+need_b = need_t | need_y
+got_b = set(bridge.get("matches") or [])
+if got_b != need_b:
+    print("FAIL  debug bridge host scope", sorted(got_b)); sys.exit(1)
+print("PASS  debug bridge is isolated and host-scoped")
 
 if not kick:
     print("FAIL  Kick content_script missing"); sys.exit(1)
@@ -193,28 +243,42 @@ PY
 
 section "3. Dangerous APIs + identity / phone-home"
 SCAN_ROOT="$PKG/src"
-if rg -n --pcre2 '\beval\s*\(|\.innerHTML\s*=|document\.write\s*\(|importScripts\s*\(|chrome\.identity|browser\.identity|navigator\.sendBeacon|geolocation|webkitRTCPeerConnection|\bRTCPeerConnection\b' "$SCAN_ROOT" >/tmp/gate-danger.txt 2>/dev/null; then
-  cat /tmp/gate-danger.txt
-  fail "dangerous API hits in packaged src"
+SCAN_PATHS=("$SCAN_ROOT")
+# video-swap-new (pixeltris) needs eval(workerString) to boot the player worker
+# blob and one innerHTML write for the in-player "Blocking ads" banner. Allow only
+# those two known lines in the vendored userscript; everything else still fails.
+DANGER_PAT='\beval\s*\(|\.innerHTML\s*=|document\.write\s*\(|importScripts\s*\(|chrome\.identity|browser\.identity|navigator\.sendBeacon|geolocation|webkitRTCPeerConnection|\bRTCPeerConnection\b'
+if rg -n --pcre2 "$DANGER_PAT" "${SCAN_PATHS[@]}" >/tmp/gate-danger-raw.txt 2>/dev/null; then
+  set +e
+  rg -v 'video-swap-new\.user\.js:[0-9]+:.*eval\(workerString\)' /tmp/gate-danger-raw.txt \
+    | rg -v 'video-swap-new\.user\.js:[0-9]+:.*adBlockDiv\.innerHTML = ' \
+    >/tmp/gate-danger.txt
+  set -e
+  if [[ -s /tmp/gate-danger.txt ]]; then
+    cat /tmp/gate-danger.txt
+    fail "dangerous API hits in packaged src"
+  else
+    pass "no unexpected eval/innerHTML/identity/beacon/RTC (video-swap-new worker eval + banner allowed)"
+  fi
 else
   pass "no eval/innerHTML/identity/beacon/RTC in packaged src"
 fi
 
-if rg -n 'new Function\s*\(' "$SCAN_ROOT" >/tmp/gate-fn.txt 2>/dev/null; then
+if rg -n 'new Function\s*\(' "${SCAN_PATHS[@]}" >/tmp/gate-fn.txt 2>/dev/null; then
   cat /tmp/gate-fn.txt
   fail "new Function in packaged src"
 else
   pass "no new Function in packaged src"
 fi
 
-if rg -ni --pcre2 '@gmail\.|@cursor\.|api[_-]?key\s*[:=]|password\s*[:=]|BEGIN (RSA |OPENSSH )?PRIVATE' "$PKG/manifest.json" "$PKG/src" >/tmp/gate-id.txt 2>/dev/null; then
+if rg -ni --pcre2 '@gmail\.|@cursor\.|api[_-]?key\s*[:=]|password\s*[:=]|BEGIN (RSA |OPENSSH )?PRIVATE' "$PKG/manifest.json" "${SCAN_PATHS[@]}" >/tmp/gate-id.txt 2>/dev/null; then
   cat /tmp/gate-id.txt
   fail "possible identity/secret strings in package"
 else
   pass "no obvious identity/secret strings"
 fi
 
-if rg -ni 'doubleclick|googlesyndication|sentry\.io|mixpanel|amplitude\.com|segment\.io|google-analytics|hotjar|clarity\.ms' "$SCAN_ROOT" >/tmp/gate-track.txt 2>/dev/null; then
+if rg -ni 'doubleclick|googlesyndication|sentry\.io|mixpanel|amplitude\.com|segment\.io|google-analytics|hotjar|clarity\.ms' "${SCAN_PATHS[@]}" >/tmp/gate-track.txt 2>/dev/null; then
   cat /tmp/gate-track.txt
   fail "tracker/ad-network strings"
 else
@@ -231,9 +295,12 @@ allowed_host_bits = (
 )
 urls = []
 for path in root.rglob("*.js"):
-    text = path.read_text(errors="replace")
-    for m in re.finditer(r"https?://[^\s\"'`]+", text):
-        urls.append((str(path), m.group(0)))
+    for line in path.read_text(errors="replace").splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("//"):
+            continue  # userscript headers / attribution comments are not runtime fetches
+        for m in re.finditer(r"https?://[^\s\"'`]+", line):
+            urls.append((str(path), m.group(0)))
 bad = []
 for path, url in urls:
     host = re.sub(r"^https?://", "", url).split("/")[0].lower()
@@ -249,12 +316,30 @@ for path, url in urls:
 PY
 
 section "4. Privileged extension API usage"
-if rg -n --pcre2 '\bchrome\.|\bbrowser\.' "$SCAN_ROOT" >/tmp/gate-ext.txt 2>/dev/null; then
-  cat /tmp/gate-ext.txt
-  fail "chrome.*/browser.* usage in packaged src"
-else
-  pass "no chrome.*/browser.* in packaged src"
-fi
+python3 - "$PKG" <<'PY' || FAILS=$((FAILS + 1))
+import pathlib, re, sys
+root = pathlib.Path(sys.argv[1])
+bad = []
+playback = ["src/vendor/video-swap-new.user.js", "src/youtube.js", "src/debug.js"]
+for rel in playback:
+    text = (root / rel).read_text(errors="replace")
+    if re.search(r"\bchrome\.|\bbrowser\.", text):
+        bad.append(rel + " uses chrome/browser")
+for rel in ["src/popup.js", "src/debug-bridge.js"]:
+    path = root / rel
+    if not path.is_file():
+        bad.append("missing " + rel)
+        continue
+    text = path.read_text(errors="replace")
+    for match in re.finditer(r"\b(chrome|browser)\.([A-Za-z0-9_]+)", text):
+        if match.group(1) != "chrome" or match.group(2) not in {"runtime", "tabs"}:
+            bad.append(f"{rel}: {match.group(0)}")
+if bad:
+    print("FAIL  extension API scope:")
+    print("\n".join(bad))
+    sys.exit(1)
+print("PASS  playback scripts have no chrome APIs; debug UI is runtime/tabs only")
+PY
 
 section "5. Deno bug / logic / memory / race / youtube"
 if [[ -n "${TEST_ROOT}" && -d "${TEST_ROOT}/test" ]]; then
@@ -275,24 +360,28 @@ else
   echo "SKIP  deno tests (no test/ next to package — use --dir on the repo)"
 fi
 
-section "6. Fuzz smoke (playlist)"
-if [[ -f "$PKG/src/playlist.js" ]]; then
+section "6. Fuzz smoke (vendor userscript parse)"
+VENDOR_JS="$PKG/src/vendor/video-swap-new.user.js"
+if [[ -f "$VENDOR_JS" ]]; then
   set +e
-  deno eval --no-lock '
-    import playlistSource from "'"$PKG"'/src/playlist.js" with { type: "text" };
-    const playlist = new Function(`${playlistSource}\nreturn TwitchAdblockPlaylist;`)();
-    const junk = ["", "{", "#EXTM3U\n\x00\xff", "#EXTM3U\n" + "A".repeat(200000), "#EXTM3U\n#EXT-X-DATERANGE:ID=\"x\",CLASS=\"twitch-stitched-ad\"\n"];
-    for (const body of junk) {
-      try { playlist.hasAdBreak(body); } catch (e) { console.error("playlist fuzz threw", e); Deno.exit(1); }
-      try { playlist.stripAds(body); } catch (e) { console.error("strip fuzz threw", e); Deno.exit(1); }
-    }
-    console.log("playlist fuzz ok");
-  ' 2>&1
+  VENDOR_ABS="$(cd "$(dirname "$VENDOR_JS")" && pwd)/$(basename "$VENDOR_JS")"
+  FUZZ_JS="$(mktemp /tmp/adblock-vendor-fuzz.XXXXXX.js)"
+  cat > "$FUZZ_JS" <<EOF
+import source from "$VENDOR_ABS" with { type: "text" };
+if (!source.includes("ourTwitchAdSolutionsVersion = 23")) throw new Error("missing version gate");
+if (!source.includes("AD_SIGNIFIER = 'stitched-ad'")) throw new Error("missing AD_SIGNIFIER");
+if (!source.includes("function reloadTwitchPlayer")) throw new Error("missing reloadTwitchPlayer");
+const body = source.replace(/^\\/\\/ ==UserScript==[\\s\\S]*?\\/\\/ ==\\/UserScript==\\s*/, "");
+new Function(body);
+console.log("vendor userscript parse ok");
+EOF
+  deno run --no-lock "$FUZZ_JS" 2>&1
   FUZZ_RC=$?
+  rm -f "$FUZZ_JS"
   set -e
-  if [[ "$FUZZ_RC" -eq 0 ]]; then pass "playlist fuzz did not throw"; else fail "playlist fuzz threw"; fi
+  if [[ "$FUZZ_RC" -eq 0 ]]; then pass "vendor userscript parse did not throw"; else fail "vendor userscript parse threw"; fi
 else
-  echo "SKIP  playlist fuzz"
+  echo "SKIP  vendor userscript parse"
 fi
 
 if [[ -f "$PKG/src/youtube.js" && -n "${TEST_ROOT}" && -d "${TEST_ROOT}/test" ]]; then

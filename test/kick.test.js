@@ -244,6 +244,6 @@ Deno.test("kick has its own content script", () => {
   assertEquals(kick.all_frames, true);
   assert(kick.matches.includes("*://kick.com/*"), "apex match");
   assert(kick.matches.includes("*://*.kick.com/*"), "subdomain match");
-  const twitch = manifest.content_scripts.find((script) => script.js.includes("src/page.js"));
-  assertEquals(twitch.js, ["src/playlist.js", "src/page.js"]);
+  const twitch = manifest.content_scripts.find((script) => script.js.includes("src/vendor/video-swap-new.user.js"));
+  assertEquals(twitch.js, ["src/vendor/video-swap-new.user.js"]);
 });
