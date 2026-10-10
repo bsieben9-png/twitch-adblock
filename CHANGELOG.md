@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The YouTube "Blocking ads" label in the player corner hides on its own. Further ad stripping on the same video no longer keeps it on screen. Opening another video can show it once more.
+
 ## 0.2.3
 
 - On a Twitch tab, the popup answers correctly when the extension is on. Copy debug includes the log from that tab, including the on-screen blocking label when it is showing.

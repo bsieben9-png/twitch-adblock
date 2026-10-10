@@ -309,6 +309,8 @@ function startYoutubeAdblock() {
   const nativeParse = JSON.parse;
   let hideTimer = 0;
   let noticeGeneration = 0;
+  // One announcement per video. Later player/DOM strips must not restart the hide.
+  let noticeLatched = false;
   const retryTimers = new Set();
 
   function requestUrl(input) {
@@ -347,6 +349,7 @@ function startYoutubeAdblock() {
   }
 
   function notify(blocking, attempt, generation) {
+    if (blocking && noticeLatched) return;
     if (blocking && !attempt) trace("youtube", "blocked");
     const existing = document.getElementById("twitch-adblock-notice");
     if (!blocking) {
@@ -374,8 +377,11 @@ function startYoutubeAdblock() {
     notice.textContent = "Blocking ads";
     notice.style.cssText = "position:absolute;top:8px;left:8px;z-index:60;color:#fff;background:rgba(0,0,0,.75);padding:4px 8px;font:12px/1.2 sans-serif;pointer-events:none;";
     if (notice.parentElement !== player) player.appendChild(notice);
-    clearTimeout(hideTimer);
+    // Latch before returning so a mutation caused by this insert cannot extend the timer.
+    noticeLatched = true;
+    if (hideTimer) return;
     hideTimer = setTimeout(() => {
+      hideTimer = 0;
       if (gen === noticeGeneration) notify(false);
     }, 8000);
   }
@@ -616,7 +622,10 @@ function startYoutubeAdblock() {
   }
 
   injectHomeFeedCss();
-  document.addEventListener("yt-navigate-start", () => notify(false), true);
+  document.addEventListener("yt-navigate-start", () => {
+    noticeLatched = false;
+    notify(false);
+  }, true);
   document.addEventListener("yt-navigate-finish", () => {
     injectHomeFeedCss();
     removeDomAds();
